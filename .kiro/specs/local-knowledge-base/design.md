@@ -1,705 +1,525 @@
-# Design Document
+# 设计文档：本地知识库 RAG CLI 工具
 
 ## Overview
 
-本系统是一个基于 Node.js 的本地 RAG CLI 工具，采用一次性进程模式运行。核心架构为：
+本地知识库系统是一个基于 Python CLI 的本地 RAG（检索增强生成）解决方案。系统采用一次性进程模式，按需触发文件扫描与向量库更新，不依赖后台服务或在线外部大模型。
 
-1. **CLI 层**：使用 `commander.js` 解析命令（scan、query、rebuild、fqa），调度各功能模块
-2. **文件处理层**：递归扫描知识库文件夹，检测文件变更，提取多格式文档文本并切块
-3. **向量化层**：使用本地 ONNX 模型（BGE-M3）通过 `@huggingface/transformers` 生成嵌入向量
-4. **存储层**：通过 ChromaDB REST API 持久化存储向量及元数据
-5. **查询层**：实现 FQA 优先级策略，先匹配人工纠错答案，再回退到向量检索
+核心能力：
+- 多格式文档解析（TXT、Markdown、Word、Excel、PDF）
+- 基于 sentence-transformers 的本地文本向量化（384 维）
+- 基于 ChromaDB PersistentClient 的本地向量存储与语义检索
+- FQA（人工纠错问答对）优先级匹配策略
+- 增量同步与全量重建
 
-系统不依赖任何在线外部大模型服务，所有计算均在本地完成。
-
-### 技术选型决策
-
-| 组件 | 选型 | 理由 |
-|------|------|------|
-| 运行时 | Node.js (CommonJS) | 项目已有 package.json，生态成熟 |
-| CLI 框架 | commander.js | Node.js 最成熟的 CLI 框架，支持子命令、参数校验、自动帮助信息 |
-| 向量数据库 | ChromaDB (本地服务 + REST 客户端) | 本地持久化，`chromadb` npm 包提供 JS 客户端 |
-| Embedding 模型 | Xenova/bge-m3 (ONNX) | 支持 100+ 语言含中文，1024 维向量，8192 token 上下文，通过 transformers.js 本地运行 |
-| 文档提取 | officeparser (docx/xlsx) + pdf.js-extract (pdf) | 纯 Node.js 实现，无外部二进制依赖 |
-| Tokenizer | BGE-M3 自带 tokenizer | 与 Embedding 模型一致，确保 token 计数准确 |
-| 属性测试 | fast-check | Node.js 最成熟的 PBT 库 |
-
-### ChromaDB 部署方式
-
-ChromaDB 以本地服务模式运行（`chroma run --path ./chroma_data`），Node.js 程序通过 `chromadb` npm 包连接 REST API。用户需在使用前启动 ChromaDB 服务。
+技术栈：
+- **语言**: Python 3.9+
+- **CLI 框架**: Click
+- **向量数据库**: ChromaDB PersistentClient（嵌入式，无需独立服务）
+- **嵌入模型**: sentence-transformers / paraphrase-multilingual-MiniLM-L12-v2（384 维）
+- **文档解析**: python-docx、openpyxl、PyPDF2、markdown-it-py
+- **测试**: pytest + hypothesis
 
 ## Architecture
 
+系统采用分层架构，各模块职责清晰，通过依赖注入实现松耦合：
+
 ```mermaid
-graph TB
-    subgraph CLI Layer
-        CLI[CLI_Engine<br/>commander.js]
-    end
+graph TD
+    CLI[CLI 入口<br/>cli.py / Click] --> SM[SyncManager<br/>sync.py]
+    CLI --> QE[QueryEngine<br/>query.py]
+    CLI --> FM[FQAManager<br/>fqa.py]
 
-    subgraph Processing Layer
-        FS[File_Scanner<br/>递归遍历 + 变更检测]
-        TC[Text_Chunker<br/>文本提取 + 切块]
-        EE[Embedding_Engine<br/>@huggingface/transformers<br/>Xenova/bge-m3]
-    end
+    SM --> FS[FileScanner<br/>scanner.py]
+    SM --> TC[TextChunker<br/>chunker.py]
+    SM --> EE[EmbeddingEngine<br/>embedding.py]
+    SM --> VS[VectorStore<br/>store.py]
 
-    subgraph Storage Layer
-        VS[Vector_Store<br/>chromadb npm client]
-        CHROMA[(ChromaDB Server<br/>本地持久化)]
-    end
-
-    subgraph FQA Layer
-        FM[FQA_Manager<br/>问答对文件管理]
-        QE[Query_Engine<br/>优先级查询策略]
-    end
-
-    CLI --> FS
-    CLI --> QE
-    CLI --> FM
-    FS --> TC
-    TC --> EE
-    EE --> VS
-    VS --> CHROMA
-    QE --> FM
     QE --> EE
     QE --> VS
+    QE --> FM
+
+    FM --> FQA_FILE[(fqa.txt)]
+    VS --> CHROMA[(ChromaDB<br/>chroma_data/)]
+    FS --> FOLDER[(Knowledge Folder)]
+    TC --> FOLDER
 ```
 
-### 数据流
+**数据流：**
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant CLI as CLI_Engine
-    participant FS as File_Scanner
-    participant TC as Text_Chunker
-    participant EE as Embedding_Engine
-    participant VS as Vector_Store
-    participant FM as FQA_Manager
+    participant CLI
+    participant SyncManager
+    participant FileScanner
+    participant TextChunker
+    participant EmbeddingEngine
+    participant VectorStore
 
-    Note over User,FM: scan 命令流程
     User->>CLI: kb scan --folder ./docs
-    CLI->>FS: scanFolder(path)
-    FS->>VS: getExistingRecords()
-    FS-->>CLI: changeList{added, modified, deleted}
+    CLI->>SyncManager: incremental_sync(folder)
+    SyncManager->>VectorStore: get_existing_files()
+    VectorStore-->>SyncManager: {file_path: last_modified}
+    SyncManager->>FileScanner: scan(folder, existing_records)
+    FileScanner-->>SyncManager: ScanResult(changes, unchanged)
+    
     loop 每个变更文件
-        CLI->>TC: extractAndChunk(file)
-        TC-->>CLI: chunks[]
-        CLI->>EE: embed(chunks)
-        EE-->>CLI: vectors[]
-        CLI->>VS: upsert(vectors, metadata)
+        SyncManager->>TextChunker: extract_text(file_path)
+        TextChunker-->>SyncManager: text
+        SyncManager->>TextChunker: chunk(text)
+        TextChunker-->>SyncManager: [Chunk, ...]
+        SyncManager->>EmbeddingEngine: embed(chunk.text)
+        EmbeddingEngine-->>SyncManager: vector (384d)
+        SyncManager->>VectorStore: upsert(id, vector, text, metadata)
     end
-    CLI-->>User: 同步摘要
-
-    Note over User,FM: query 命令流程
-    User->>CLI: kb query "如何退货"
-    CLI->>QE: query(question)
-    QE->>EE: embed(question)
-    QE->>FM: semanticMatch(questionVector)
-    alt FQA 相似度 > 0.85
-        FM-->>QE: fqaAnswer
-        QE-->>CLI: FQA 答案
-    else FQA 相似度 <= 0.85
-        QE->>VS: search(questionVector, top=5)
-        VS-->>QE: relevantChunks[]
-        QE-->>CLI: 相关文档片段
-    end
-    CLI-->>User: 查询结果
+    
+    SyncManager-->>CLI: stats
+    CLI-->>User: 统计摘要
 ```
 
 ## Components and Interfaces
 
-### CLI_Engine
+### CLI 入口 (`src/cli.py`)
 
-```javascript
-// src/cli.js
-const { Command } = require('commander');
+使用 Click 框架定义命令组，支持全局选项和子命令：
 
-/**
- * CLI 配置项
- * @typedef {Object} CLIConfig
- * @property {string} knowledgeFolder - 知识库文件夹路径
- * @property {string} chromaUrl - ChromaDB 服务地址，默认 http://localhost:8000
- * @property {string} chromaCollection - ChromaDB collection 名称
- * @property {string} fqaFilePath - FQA 文件路径
- * @property {string} embeddingModel - Embedding 模型名称
- * @property {number} chunkSize - 切块大小（token），默认 512
- * @property {number} chunkOverlap - 重叠大小（token），默认 64
- * @property {number} fqaThreshold - FQA 匹配阈值，默认 0.85
- * @property {number} topK - 向量检索返回数量，默认 5
- */
-
-// 命令定义
-// kb scan --folder <path>           扫描并增量同步
-// kb query <question>               查询知识库
-// kb rebuild --folder <path>        全量重建
-// kb fqa --add "问题=答案"          添加 FQA 记录
+```python
+@click.group()
+@click.option("--chroma-path", default="./chroma_data")
+@click.option("--collection", default="knowledge_base")
+@click.option("--fqa-path", default="./fqa.txt")
+@click.option("--model", default="paraphrase-multilingual-MiniLM-L12-v2")
+@click.option("--chunk-size", default=512, type=int)
+@click.option("--chunk-overlap", default=64, type=int)
+@click.option("--fqa-threshold", default=0.85, type=float)
+@click.option("--top-k", default=5, type=int)
+def cli(ctx, ...):
+    """本地知识库 RAG CLI 工具"""
 ```
 
-### File_Scanner
+子命令：
+- `kb scan --folder <path>` — 增量扫描并同步
+- `kb query <question>` — 语义查询
+- `kb rebuild --folder <path>` — 全量重建
+- `kb fqa --add "问题=答案"` — 添加 FQA 记录
 
-```javascript
-// src/scanner.js
+### FileScanner (`src/scanner.py`)
 
-/**
- * @typedef {Object} FileChange
- * @property {string} filePath - 相对于 knowledgeFolder 的路径
- * @property {string} absolutePath - 绝对路径
- * @property {'added'|'modified'|'deleted'} status - 变更状态
- * @property {number} [lastModified] - 文件最后修改时间戳（毫秒）
- */
-
-/**
- * @typedef {Object} ScanResult
- * @property {FileChange[]} changes - 变更文件列表
- * @property {number} unchanged - 未变更文件数
- * @property {Array<{path: string, reason: string}>} errors - 扫描错误
- */
-
-const SUPPORTED_EXTENSIONS = new Set(['.txt', '.md', '.doc', '.docx', '.xls', '.xlsx', '.pdf']);
-
-class FileScanner {
-  /**
-   * @param {string} folderPath - 知识库文件夹路径
-   * @param {Map<string, number>} existingRecords - 已索引文件 file_path -> last_modified
-   * @returns {Promise<ScanResult>}
-   */
-  async scan(folderPath, existingRecords) { /* ... */ }
-}
+```python
+class FileScanner:
+    def scan(self, folder_path: str, existing_records: Dict[str, int]) -> ScanResult:
+        """递归遍历文件夹，对比向量库记录，生成变更清单。
+        
+        Args:
+            folder_path: 知识库文件夹路径
+            existing_records: {相对路径: last_modified 时间戳(ms)}
+            
+        Returns:
+            ScanResult(changes, unchanged, errors)
+            
+        Raises:
+            FileNotFoundError: 路径不存在
+            NotADirectoryError: 路径不是目录
+        """
 ```
 
-### Text_Chunker
+支持的文件扩展名：`.txt`, `.md`, `.doc`, `.docx`, `.xls`, `.xlsx`, `.pdf`
 
-```javascript
-// src/chunker.js
+### TextChunker (`src/chunker.py`)
 
-/**
- * @typedef {Object} Chunk
- * @property {string} text - 切块文本内容
- * @property {number} index - 在源文件中的序号（从 0 开始）
- * @property {number} tokenCount - 该块的 token 数量
- */
+```python
+class TextChunker:
+    SUPPORTED_EXTENSIONS = {
+        ".txt": "_extract_txt",
+        ".md": "_extract_markdown",
+        ".doc": "_extract_word",
+        ".docx": "_extract_word",
+        ".xls": "_extract_excel",
+        ".xlsx": "_extract_excel",
+        ".pdf": "_extract_pdf",
+    }
 
-/**
- * @typedef {Object} ChunkOptions
- * @property {number} chunkSize - 目标块大小，默认 512 tokens
- * @property {number} overlap - 重叠区域，默认 64 tokens
- */
+    def __init__(self, tokenizer=None, chunk_size: int = 512, chunk_overlap: int = 64):
+        ...
 
-class TextChunker {
-  /**
-   * @param {Object} tokenizer - BGE-M3 tokenizer 实例
-   * @param {ChunkOptions} options
-   */
-  constructor(tokenizer, options) { /* ... */ }
+    def extract_text(self, file_path: str) -> Optional[str]:
+        """从文件提取纯文本，根据扩展名分发到对应提取器"""
 
-  /**
-   * 从文件提取文本
-   * @param {string} filePath - 文件绝对路径
-   * @returns {Promise<string>} 提取的纯文本
-   */
-  async extractText(filePath) { /* ... */ }
-
-  /**
-   * 将文本切分为 Chunk
-   * @param {string} text - 原始文本
-   * @returns {Chunk[]}
-   */
-  chunk(text) { /* ... */ }
-
-  /**
-   * 在 token 序列中找到最近的中文句子边界
-   * @param {number[]} tokens - token ID 序列
-   * @param {number} maxPos - 最大位置
-   * @returns {number} 切分位置
-   */
-  findSentenceBoundary(tokens, maxPos) { /* ... */ }
-}
+    def chunk(self, text: str) -> List[Chunk]:
+        """将文本按 token 切分为多个 Chunk，保留重叠区域"""
 ```
 
-**文本提取策略**：
+切块策略：
+- 使用模型 tokenizer 进行 token 计数
+- 默认 512 token/块，64 token 重叠
+- 优先在中文句子边界（。！？；\n）处切分
+- 最后一块不足 overlap token 时合并到前一块
 
-| 文件格式 | 提取方式 | 策略 |
-|----------|----------|------|
-| .txt | fs.readFile (UTF-8) | 直接读取 |
-| .md | 正则移除语法标记 | 保留结构换行，移除 #、*、[]() 等 |
-| .doc/.docx | officeparser | 按段落顺序提取 |
-| .xls/.xlsx | officeparser | 按工作表→行→单元格拼接 |
-| .pdf | pdf.js-extract | 按页码顺序提取文本 |
+### EmbeddingEngine (`src/embedding.py`)
 
-### Embedding_Engine
+```python
+class EmbeddingEngine:
+    MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+    VECTOR_DIM = 384
 
-```javascript
-// src/embedding.js
+    def __init__(self, model_name: Optional[str] = None):
+        """延迟加载策略，首次使用时加载模型"""
 
-class EmbeddingEngine {
-  static MODEL_NAME = 'Xenova/bge-m3';
-  static VECTOR_DIM = 1024;
+    def embed(self, text: str) -> np.ndarray:
+        """单条文本向量化，返回 384 维归一化向量"""
 
-  /**
-   * @param {string} [modelName] - 模型名称，默认 Xenova/bge-m3
-   */
-  constructor(modelName) { /* ... */ }
+    def embed_batch(self, texts: list) -> np.ndarray:
+        """批量文本向量化，返回 shape=(n, 384) 的数组"""
 
-  /**
-   * 初始化模型（延迟加载）
-   */
-  async initialize() { /* ... */ }
-
-  /**
-   * 单条文本向量化
-   * @param {string} text
-   * @returns {Promise<number[]>} 1024 维向量
-   */
-  async embed(text) { /* ... */ }
-
-  /**
-   * 批量文本向量化
-   * @param {string[]} texts
-   * @returns {Promise<number[][]>}
-   */
-  async embedBatch(texts) { /* ... */ }
-
-  /**
-   * 获取 tokenizer 实例（供 Text_Chunker 使用）
-   * @returns {Object}
-   */
-  getTokenizer() { /* ... */ }
-}
+    def get_tokenizer(self):
+        """返回 tokenizer 实例供 TextChunker 使用"""
 ```
 
-### Vector_Store
+### VectorStore (`src/store.py`)
 
-```javascript
-// src/store.js
+```python
+class VectorStore:
+    def __init__(self, chroma_path: str, collection_name: str = "knowledge_base"):
+        ...
 
-/**
- * @typedef {Object} ChunkMetadata
- * @property {string} file_path - 源文件相对路径
- * @property {string} file_hash - 源文件内容 SHA-256 哈希
- * @property {number} chunk_index - Chunk 序号
- * @property {number} last_modified - 源文件最后修改时间戳
- */
+    def initialize(self) -> None:
+        """创建或获取 collection，使用 cosine 距离度量"""
 
-/**
- * @typedef {Object} SearchResult
- * @property {string} text - 文本内容
- * @property {ChunkMetadata} metadata - 元数据
- * @property {number} distance - 距离（越小越相似）
- */
+    def upsert(self, id: str, vector, text: str, metadata: ChunkMetadata) -> None:
+        """插入或更新向量记录，ID 格式为 '{file_path}::{chunk_index}'"""
 
-class VectorStore {
-  /**
-   * @param {string} chromaUrl - ChromaDB 服务地址
-   * @param {string} collectionName - Collection 名称
-   */
-  constructor(chromaUrl, collectionName) { /* ... */ }
+    def delete_by_file_path(self, file_path: str) -> None:
+        """删除指定文件的所有向量记录"""
 
-  async initialize() { /* ... */ }
+    def delete_all(self) -> int:
+        """删除所有向量记录，返回删除数量"""
 
-  /**
-   * 插入或更新向量记录
-   * ID 格式: "{file_path}::{chunk_index}"
-   */
-  async upsert(id, vector, text, metadata) { /* ... */ }
+    def search(self, vector, top_k: int = 5) -> List[SearchResult]:
+        """语义检索，返回按距离排序的结果"""
 
-  /** 删除指定文件的所有向量记录 */
-  async deleteByFilePath(filePath) { /* ... */ }
-
-  /** 删除所有向量记录 */
-  async deleteAll() { /* ... */ }
-
-  /** 语义检索 */
-  async search(vector, topK) { /* ... */ }
-
-  /** 获取已索引文件的 file_path -> last_modified 映射 */
-  async getExistingFiles() { /* ... */ }
-
-  /** 获取当前向量记录总数 */
-  async getRecordCount() { /* ... */ }
-}
+    def get_existing_files(self) -> Dict[str, int]:
+        """获取已索引文件的 file_path -> last_modified 映射"""
 ```
 
-### FQA_Manager
+### FQAManager (`src/fqa.py`)
 
-```javascript
-// src/fqa.js
+```python
+class FQAManager:
+    def __init__(self, fqa_file_path: str):
+        ...
 
-/**
- * @typedef {Object} FQAPair
- * @property {string} question
- * @property {string} answer
- */
+    def load(self) -> List[FQAPair]:
+        """加载并解析 FQA 文件，跳过空行和无效行"""
 
-class FQAManager {
-  /**
-   * @param {string} fqaFilePath - FQA 文件路径
-   */
-  constructor(fqaFilePath) { /* ... */ }
+    def append(self, question: str, answer: str) -> None:
+        """追加写入问答对，自动创建文件和父目录"""
 
-  /**
-   * 加载并解析 FQA 文件
-   * @returns {Promise<FQAPair[]>}
-   */
-  async load() { /* ... */ }
-
-  /**
-   * 追加写入一条问答对
-   * @param {FQAPair} pair
-   */
-  async append(pair) { /* ... */ }
-
-  /**
-   * 对 FQA 问题进行语义匹配
-   * @param {number[]} queryVector - 查询向量
-   * @param {EmbeddingEngine} embedEngine
-   * @returns {Promise<{bestMatch: FQAPair|null, similarity: number}>}
-   */
-  async semanticMatch(queryVector, embedEngine) { /* ... */ }
-}
+    def semantic_match(self, query_vector: np.ndarray, embedding_engine) -> Optional[Tuple[FQAPair, float]]:
+        """对所有 FQA 问题向量化后计算余弦相似度，返回最高匹配"""
 ```
 
-### Query_Engine
+### QueryEngine (`src/query.py`)
 
-```javascript
-// src/query.js
+```python
+class QueryEngine:
+    FQA_THRESHOLD = 0.85
 
-/**
- * @typedef {Object} QueryResult
- * @property {'fqa'|'vector_store'} source - 结果来源
- * @property {string} [answer] - FQA 答案
- * @property {SearchResult[]} [chunks] - 向量检索结果
- * @property {number} similarity - 最高相似度
- */
+    def __init__(self, embedding_engine, vector_store, fqa_manager, fqa_threshold=0.85):
+        ...
 
-class QueryEngine {
-  static FQA_THRESHOLD = 0.85;
+    def validate_question(self, question: str) -> bool:
+        """验证查询问题是否有效（拒绝空/纯空白）"""
 
-  /**
-   * @param {EmbeddingEngine} embeddingEngine
-   * @param {VectorStore} vectorStore
-   * @param {FQAManager} fqaManager
-   */
-  constructor(embeddingEngine, vectorStore, fqaManager) { /* ... */ }
-
-  /**
-   * 执行查询
-   * @param {string} question
-   * @param {number} [topK=5]
-   * @returns {Promise<QueryResult>}
-   */
-  async query(question, topK = 5) { /* ... */ }
-
-  /**
-   * 验证查询是否有效（非空、非纯空白）
-   * @param {string} question
-   * @returns {boolean}
-   */
-  validateQuestion(question) { /* ... */ }
-}
+    def query(self, question: str, top_k: int = 5) -> QueryResult:
+        """执行查询：验证 → 向量化 → FQA 匹配 → 阈值判断 → 回退向量检索"""
 ```
+
+### SyncManager (`src/sync.py`)
+
+```python
+class SyncManager:
+    def __init__(self, file_scanner, text_chunker, embedding_engine, vector_store):
+        ...
+
+    def incremental_sync(self, folder_path: str) -> dict:
+        """增量同步：扫描变更 → 分类处理（新增/修改/删除）"""
+
+    def full_rebuild(self, folder_path: str) -> dict:
+        """全量重建：删除所有 → 重新扫描索引"""
+```
+
+修改文件的处理流程包含回滚机制：
+1. 备份旧记录
+2. 删除旧记录
+3. 重新提取、切块、向量化、存储
+4. 失败时恢复备份
 
 ## Data Models
 
-### ChromaDB Collection Schema
+```python
+@dataclass
+class FileChange:
+    file_path: str          # 相对于 knowledge_folder 的路径
+    absolute_path: str      # 文件绝对路径
+    status: str             # 'added' | 'modified' | 'deleted'
+    last_modified: Optional[int]  # 最后修改时间戳（毫秒）
+
+@dataclass
+class ScanResult:
+    changes: List[FileChange]     # 变更文件列表
+    unchanged: int                # 未变更文件数
+    errors: List[dict]            # 错误列表 [{path, reason}]
+
+@dataclass
+class Chunk:
+    text: str           # 切块文本内容
+    index: int          # 在源文件中的序号（从 0 开始）
+    token_count: int    # 该块的 token 数量
+
+@dataclass
+class ChunkMetadata:
+    file_path: str      # 源文件相对路径
+    file_hash: str      # 源文件 SHA-256 哈希
+    chunk_index: int    # Chunk 序号
+    last_modified: int  # 源文件最后修改时间戳（毫秒）
+
+@dataclass
+class SearchResult:
+    text: str                   # 文本内容
+    metadata: ChunkMetadata     # 元数据
+    distance: float             # 余弦距离（越小越相似）
+
+@dataclass
+class FQAPair:
+    question: str   # 问题
+    answer: str     # 答案
+
+@dataclass
+class QueryResult:
+    source: str                     # 'fqa' | 'vector_store'
+    answer: Optional[str]           # FQA 答案或提示信息
+    chunks: List[SearchResult]      # 向量检索结果
+    similarity: float               # 最高相似度
+
+@dataclass
+class CLIConfig:
+    knowledge_folder: str = "./docs"
+    chroma_path: str = "./chroma_data"
+    chroma_collection: str = "knowledge_base"
+    fqa_file_path: str = "./fqa.txt"
+    embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    chunk_size: int = 512
+    chunk_overlap: int = 64
+    fqa_threshold: float = 0.85
+    top_k: int = 5
+```
+
+**ChromaDB 存储结构：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | string | `{file_path}::{chunk_index}` |
+| embedding | float[384] | 归一化向量 |
+| document | string | 原始文本 |
+| metadata.file_path | string | 源文件相对路径 |
+| metadata.file_hash | string | SHA-256 哈希 |
+| metadata.chunk_index | int | Chunk 序号 |
+| metadata.last_modified | int | 修改时间戳(ms) |
+
+**FQA 文件格式：**
 
 ```
-Collection: "knowledge_base" (可配置)
-Distance Metric: cosine
-
-Document Structure:
-- id: string              // 格式: "{file_path}::{chunk_index}"
-- embedding: float[]      // 1024 维向量 (BGE-M3)
-- document: string        // Chunk 原始文本
-- metadata:
-    - file_path: string   // 相对路径
-    - file_hash: string   // SHA-256
-    - chunk_index: int    // 从 0 开始
-    - last_modified: int  // Unix 时间戳（毫秒）
-```
-
-### FQA 文件格式
-
-```text
-# 每行一个问答对，等号分隔
-# 空行和不含等号的行将被跳过
 如何退货=请联系客服400-xxx-xxxx，提供订单号即可申请退货
 退货运费谁承担=质量问题由我方承担运费，非质量问题由买家承担
 ```
 
-- 编码：UTF-8
-- 每行一个问答对
-- 分隔符：第一个 `=` 字符（问题部分不得包含等号）
-- 空行和不含 `=` 的行被跳过
-
-### 配置
-
-系统配置通过 CLI 参数和环境变量传入：
-
-| 配置项 | CLI 参数 | 环境变量 | 默认值 |
-|--------|----------|----------|--------|
-| 知识库路径 | --folder | KB_FOLDER | ./docs |
-| ChromaDB 地址 | --chroma-url | CHROMA_URL | http://localhost:8000 |
-| Collection 名称 | --collection | CHROMA_COLLECTION | knowledge_base |
-| FQA 文件路径 | --fqa-path | FQA_PATH | ./fqa.txt |
-| Embedding 模型 | --model | EMBEDDING_MODEL | Xenova/bge-m3 |
-| 切块大小 | --chunk-size | CHUNK_SIZE | 512 |
-| 重叠大小 | --chunk-overlap | CHUNK_OVERLAP | 64 |
-| FQA 阈值 | --fqa-threshold | FQA_THRESHOLD | 0.85 |
-| 检索数量 | --top-k | TOP_K | 5 |
-
-### 文件变更检测逻辑
-
-```mermaid
-flowchart TD
-    A[遍历 Knowledge_Folder] --> B{文件扩展名支持?}
-    B -->|否| C[跳过]
-    B -->|是| D{向量库中有记录?}
-    D -->|否| E[标记为 新增]
-    D -->|是| F{last_modified 一致?}
-    F -->|是| G[标记为 未变更]
-    F -->|否| H[标记为 已修改]
-    
-    I[遍历向量库记录] --> J{文件仍存在?}
-    J -->|否| K[标记为 已删除]
-    J -->|是| L[已在上方处理]
-```
-
-### 项目目录结构
-
-```
-question-and-answer/
-├── src/
-│   ├── cli.js              # CLI 入口与命令定义
-│   ├── scanner.js          # 文件扫描与变更检测
-│   ├── chunker.js          # 文本提取与切块
-│   ├── embedding.js        # 本地 Embedding
-│   ├── store.js            # ChromaDB 向量存储
-│   ├── fqa.js              # FQA 文件管理
-│   ├── query.js            # 查询引擎
-│   └── sync.js             # 增量同步协调
-├── tests/
-│   ├── scanner.test.js
-│   ├── chunker.test.js
-│   ├── fqa.test.js
-│   ├── query.test.js
-│   ├── sync.test.js
-│   └── properties/         # 属性测试
-│       ├── scanner.prop.js
-│       ├── chunker.prop.js
-│       ├── fqa.prop.js
-│       ├── query.prop.js
-│       └── sync.prop.js
-├── docs/
-│   └── 我的需求.md
-├── package.json
-└── README.md
-```
-
-
 ## Correctness Properties
 
-*A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
+*属性（Property）是在系统所有有效执行中都应成立的特征或行为——本质上是对系统应做什么的形式化陈述。属性是人类可读规范与机器可验证正确性保证之间的桥梁。*
 
-### Property 1: 文件变更检测正确性
+### Property 1: 扫描器分类正确性
 
-*For any* set of files on disk and any set of existing records in the vector store, the File_Scanner SHALL classify each entry correctly: files on disk but not in records are "added", files in both but with different timestamps are "modified", records without corresponding files on disk are "deleted", and files with matching timestamps are "unchanged".
+*对于任意*文件系统状态和已有记录映射，FileScanner 应将每个支持格式的文件正确分类：不在记录中的文件标记为 "added"，时间戳不一致的文件标记为 "modified"，记录中存在但文件系统中不存在的文件标记为 "deleted"，时间戳一致的文件计入 unchanged。
 
 **Validates: Requirements 2.2, 2.3, 2.4**
 
-### Property 2: 文件扩展名过滤
+### Property 2: 扫描器扩展名过滤
 
-*For any* file path, the File_Scanner SHALL include it in the scan results if and only if its extension is in the supported set {.txt, .md, .doc, .docx, .xls, .xlsx, .pdf} (case-insensitive).
+*对于任意*文件夹内容，FileScanner 的扫描结果中所有文件的扩展名都属于支持的扩展名集合（.txt, .md, .doc, .docx, .xls, .xlsx, .pdf），不支持的扩展名文件不会出现在变更清单中。
 
 **Validates: Requirements 2.5, 2.6**
 
-### Property 3: 文本切块不变量
+### Property 3: TXT 提取 round-trip
 
-*For any* non-empty text input, the Text_Chunker SHALL produce chunks where: (a) each chunk contains at most 512 tokens, (b) for any two adjacent chunks, the last 64 tokens of the preceding chunk equal the first 64 tokens of the following chunk, and (c) if the final remainder is less than 64 tokens, it is merged into the preceding chunk rather than forming a separate chunk.
+*对于任意*有效 UTF-8 文本字符串（非空且非纯空白），将其写入 .txt 文件后通过 TextChunker.extract_text 提取，应得到与原始文本相同的内容。
 
-**Validates: Requirements 3.6, 3.7, 3.8**
+**Validates: Requirements 3.1**
 
-### Property 4: FQA 文件解析往返
+### Property 4: Markdown 提取去除语法标记
 
-*For any* list of valid FQA pairs (where questions contain no "=" character and no newline), serializing them to the "question=answer" line format and then parsing the result back SHALL produce the original list of pairs.
+*对于任意*包含 Markdown 语法标记（#、**、*、```等）的文本，通过 TextChunker 提取后的结果不应包含这些语法标记字符序列，但应保留所有纯文本内容。
 
-**Validates: Requirements 7.2**
+**Validates: Requirements 3.2**
 
-### Property 5: FQA 解析鲁棒性
+### Property 5: Word 提取保留段落
 
-*For any* FQA file content containing a mix of valid "question=answer" lines, empty lines, and lines without the "=" separator, the FQA_Manager SHALL return exactly the set of valid pairs, preserving their order, and silently skip all invalid lines.
+*对于任意*段落文本列表，创建 Word 文档后通过 TextChunker 提取，提取结果应包含所有段落文本且保持原始顺序。
 
-**Validates: Requirements 7.6**
+**Validates: Requirements 3.3**
 
-### Property 6: FQA 追加保序性
+### Property 6: Excel 提取保留单元格
 
-*For any* sequence of FQA pairs appended to a file, reading the file back SHALL return all previously existing pairs followed by all newly appended pairs in their original append order.
+*对于任意*二维字符串表格数据，创建 Excel 文件后通过 TextChunker 提取，提取结果应包含所有非空单元格的字符串值。
 
-**Validates: Requirements 7.3**
+**Validates: Requirements 3.4**
 
-### Property 7: 查询优先级阈值决策
+### Property 7: Chunk 大小不变量
 
-*For any* query and FQA dataset, if the maximum semantic similarity between the query and any FQA question exceeds 0.85, the Query_Engine SHALL return the corresponding FQA answer without querying the Vector_Store; otherwise it SHALL query the Vector_Store and return the top 5 results.
+*对于任意*非空文本，TextChunker.chunk 产生的每个 Chunk 的 token_count 不超过 chunk_size + chunk_overlap（合并最后一块时允许的最大值）。
 
-**Validates: Requirements 8.2, 8.3**
+**Validates: Requirements 3.6**
 
-### Property 8: 空白查询拒绝
+### Property 8: 相邻 Chunk 重叠正确性
 
-*For any* string composed entirely of whitespace characters (including empty string), the Query_Engine SHALL reject the query and return an error prompt without performing any semantic matching.
+*对于任意*产生多个 Chunk 的文本，相邻 Chunk 之间应有 chunk_overlap 个 token 的重叠：前一个 Chunk 的最后 chunk_overlap 个 token 应等于后一个 Chunk 的前 chunk_overlap 个 token。
 
-**Validates: Requirements 8.4**
+**Validates: Requirements 3.7**
 
-### Property 9: 中文句子边界切分
+### Property 9: 最后一块最小长度
 
-*For any* Chinese text containing sentence-ending punctuation (。！？；\n), the Text_Chunker SHALL prefer to split at the nearest sentence boundary within the 512-token limit, and SHALL never split a multi-byte character across chunk boundaries. For mixed Chinese-English text, language transitions SHALL NOT force a chunk boundary.
+*对于任意*产生多个 Chunk 的文本，最后一个 Chunk 的 token_count 不应小于 chunk_overlap。
 
-**Validates: Requirements 9.1, 9.4**
+**Validates: Requirements 3.8**
 
-### Property 10: 增量同步一致性
+### Property 10: Embedding 维度不变量
 
-*For any* change list produced by File_Scanner, after incremental sync completes: (a) all "added" files have their chunks stored with correct metadata, (b) all "modified" files have only their new chunks stored (old chunks removed), (c) all "deleted" files have zero chunks in the store, (d) all "unchanged" files retain their original chunks unmodified, and (e) the output summary counts match the actual changes applied.
-
-**Validates: Requirements 5.1, 5.2, 5.4, 5.5, 5.6**
-
-### Property 11: 无效命令处理
-
-*For any* command string that is not in the valid command set {scan, query, rebuild, fqa}, or any valid command with missing/malformed required parameters, the CLI_Engine SHALL output usage/help information and exit with code 1.
-
-**Validates: Requirements 1.2, 1.3**
-
-### Property 12: Embedding 维度不变量
-
-*For any* non-empty text string, the Embedding_Engine SHALL produce a vector of exactly 1024 dimensions (BGE-M3 output size), regardless of input length or language.
+*对于任意*非空文本字符串，EmbeddingEngine.embed 返回的向量维度恒为 384，且为 numpy float32 数组。
 
 **Validates: Requirements 4.1**
 
-### Property 13: 向量存储幂等性与元数据完整性
+### Property 11: FQA 文件 round-trip
 
-*For any* chunk with a given file_path and chunk_index, upserting it multiple times SHALL result in exactly one record in the store, and that record SHALL contain all required metadata fields (file_path, file_hash, chunk_index, last_modified) with the values from the most recent upsert.
+*对于任意*问答对列表（问题不含等号字符），通过 FQAManager.append 逐条写入后再通过 FQAManager.load 读取，应得到与原始列表相同的问答对（顺序一致）。
 
-**Validates: Requirements 4.3, 4.4**
+**Validates: Requirements 7.2, 7.3**
+
+### Property 12: FQA 无效行过滤
+
+*对于任意*包含有效行（含等号）和无效行（空行或不含等号的行）的 FQA 文件，FQAManager.load 应只返回有效行对应的问答对，跳过所有无效行。
+
+**Validates: Requirements 7.6**
+
+### Property 13: FQA 优先级阈值判定
+
+*对于任意*查询，当 FQA 语义匹配的最高相似度大于 fqa_threshold 时，QueryEngine 应返回 source="fqa" 的结果；当相似度不大于 fqa_threshold 时，应返回 source="vector_store" 的结果。
+
+**Validates: Requirements 8.2, 8.3**
+
+### Property 14: 空查询拒绝
+
+*对于任意*由空白字符（空格、制表符、换行符等）组成的字符串（包括空字符串），QueryEngine.query 应抛出 ValueError。
+
+**Validates: Requirements 8.4**
+
+### Property 15: 中文句子边界切分
+
+*对于任意*包含中文句子边界标点（。！？；\n）的中文文本，当文本长度超过 chunk_size 时，TextChunker 应优先在句子边界处切分，使得切分点位于标点之后。
+
+**Validates: Requirements 9.1, 9.4**
 
 ## Error Handling
 
-### 错误处理策略
+| 场景 | 处理策略 | 用户反馈 |
+|------|----------|----------|
+| 知识库路径不存在 | 抛出 FileNotFoundError | CLI 输出错误信息，退出码 1 |
+| 知识库路径不是目录 | 抛出 NotADirectoryError | CLI 输出错误信息，退出码 1 |
+| 文件提取失败（损坏/编码错误） | 记录错误日志，跳过该文件 | 统计摘要中显示失败文件 |
+| 单个 Chunk 向量化失败 | 跳过该 Chunk，继续处理 | 错误日志记录 |
+| 修改文件更新失败 | 回滚到旧记录 | 统计摘要中显示失败及原因 |
+| FQA 文件不存在 | 自动创建文件及父目录 | 无（静默处理） |
+| FQA 文件 I/O 错误 | 抛出 RuntimeError | CLI 输出错误信息 |
+| 空查询 | 抛出 ValueError | CLI 输出提示信息 |
+| 向量检索无结果 | 返回提示信息 | 显示"未找到相关内容" |
+| 模型加载失败 | 异常传播 | CLI 输出初始化失败信息 |
 
-系统采用"跳过并继续"的容错策略，确保单个文件的处理失败不会中断整体流程。
+**回滚机制（修改文件）：**
 
-| 错误场景 | 处理方式 | 退出码 |
-|----------|----------|--------|
-| Knowledge_Folder 路径无效 | 终止扫描，输出错误信息 | 1 |
-| 文件编码无法识别/文件损坏 | 记录错误日志，跳过该文件 | 0 |
-| 文件内容为空 | 记录警告日志，跳过该文件 | 0 |
-| Embedding 生成失败 | 记录错误日志，跳过该 Chunk | 0 |
-| ChromaDB 连接失败 | 终止操作，输出连接错误信息 | 1 |
-| 已修改文件更新过程中失败 | 回滚该文件，保留原有记录 | 0 |
-| FQA 文件 I/O 错误 | 显示错误信息，保留已有内容 | 1 |
-| 无效命令/参数 | 输出帮助/用法信息 | 1 |
-| 查询为空白字符串 | 返回提示信息 | 0 |
-
-### 日志级别
-
-- **ERROR**: 文件处理失败、I/O 错误、连接失败
-- **WARN**: 空文件跳过、不支持的文件格式
-- **INFO**: 扫描进度、同步摘要、查询结果
-
-### 回滚机制
-
-对于"已修改"文件的更新操作，采用以下事务性策略：
-
-```
-1. 从 ChromaDB 读取该文件的旧向量记录备份（ids + embeddings + documents + metadata）
-2. 删除该文件的旧向量记录
-3. 对修改后的文件重新提取文本、切块、生成向量
-4. 写入新向量记录
-5. 如果步骤 3-4 中任何环节失败：
-   a. 删除已写入的部分新记录（如有）
-   b. 恢复步骤 1 中备份的旧记录
-   c. 记录错误日志
+```python
+# 1. 备份旧记录
+backup = self._get_file_records_backup(file_path)
+# 2. 删除旧记录
+self.vector_store.delete_by_file_path(file_path)
+# 3. 尝试重新处理
+try:
+    chunks_stored = self._extract_chunk_embed_store(change)
+except Exception:
+    # 4. 失败时恢复备份
+    self._restore_backup(backup)
 ```
 
 ## Testing Strategy
 
-### 测试框架选型
+### 测试框架
 
-- **单元测试**: Jest
-- **属性测试**: fast-check（Node.js 最成熟的 PBT 库）
-- **集成测试**: Jest + 本地 ChromaDB 实例
+- **单元测试**: pytest
+- **属性测试**: hypothesis（property-based testing）
+- **测试配置**: `pyproject.toml` 中 `[tool.pytest.ini_options]`
+
+### 双重测试方法
+
+**单元测试（pytest）：**
+- 验证具体示例和边界条件
+- 使用 `unittest.mock.MagicMock` 隔离外部依赖
+- 覆盖错误处理路径和集成点
+
+**属性测试（hypothesis）：**
+- 验证跨所有输入的通用属性
+- 每个属性测试最少运行 100 次迭代
+- 每个测试标注对应的设计文档属性
 
 ### 属性测试配置
 
-每个属性测试配置最少 100 次迭代。每个测试标注对应的 Property 编号：
+```python
+from hypothesis import given, settings, strategies as st
 
-```javascript
-const fc = require('fast-check');
-
-// Feature: local-knowledge-base, Property 4: FQA 文件解析往返
-describe('Property 4: FQA round-trip', () => {
-  it('serializing then parsing FQA pairs produces original pairs', () => {
-    fc.assert(
-      fc.property(
-        fc.array(fc.record({
-          question: fc.string({ minLength: 1 })
-            .filter(s => !s.includes('=') && !s.includes('\n')),
-          answer: fc.string({ minLength: 1 })
-            .filter(s => !s.includes('\n'))
-        })),
-        (pairs) => {
-          const serialized = pairs.map(p => `${p.question}=${p.answer}`).join('\n');
-          const parsed = parseFQA(serialized);
-          expect(parsed).toEqual(pairs);
-        }
-      ),
-      { numRuns: 100 }
-    );
-  });
-});
+@settings(max_examples=100)
+@given(...)
+def test_property_name(...):
+    # Feature: local-knowledge-base, Property N: <property_text>
+    ...
 ```
 
 ### 测试分层
 
-| 层级 | 测试类型 | 覆盖范围 |
-|------|----------|----------|
-| 单元测试 | Example-based | 各模块独立功能、边界条件、错误处理 |
-| 属性测试 | Property-based | 13 个正确性属性 |
-| 集成测试 | End-to-end | CLI 命令完整流程、ChromaDB 交互 |
+| 层级 | 工具 | 覆盖范围 |
+|------|------|----------|
+| 属性测试 | hypothesis | 核心逻辑的通用正确性（切块、扫描、查询路由、FQA 解析） |
+| 单元测试 | pytest + mock | 具体示例、错误处理、模块交互 |
+| 集成测试 | pytest + 临时 ChromaDB | 端到端流程、持久化验证、模型质量 |
 
-### 单元测试重点
+### 关键测试策略
 
-- Text_Chunker: 各格式文件提取、空文件处理、编码错误处理
-- FQA_Manager: 文件创建、I/O 错误模拟
-- CLI_Engine: 命令路由、参数校验
-- 增量同步: 回滚机制、统计摘要
+**TextChunker 测试：**
+- 使用 MockTokenizer（字符级 tokenization）隔离真实模型依赖
+- 属性测试覆盖：chunk 大小不变量、重叠正确性、最后块合并
+- 单元测试覆盖：各格式提取、空文件、损坏文件
 
-### 属性测试重点
+**FileScanner 测试：**
+- 使用 `tempfile.TemporaryDirectory` 创建临时文件系统
+- 属性测试覆盖：分类正确性、扩展名过滤
+- 单元测试覆盖：递归遍历、错误路径
 
-所有 13 个正确性属性均需实现为 fast-check 属性测试：
+**QueryEngine 测试：**
+- 使用 MagicMock 隔离 EmbeddingEngine、VectorStore、FQAManager
+- 属性测试覆盖：FQA 优先级阈值判定、空查询拒绝
+- 单元测试覆盖：具体查询场景、调用顺序验证
 
-```javascript
-// Feature: local-knowledge-base, Property 1: 文件变更检测正确性
-// Feature: local-knowledge-base, Property 2: 文件扩展名过滤
-// Feature: local-knowledge-base, Property 3: 文本切块不变量
-// Feature: local-knowledge-base, Property 4: FQA 文件解析往返
-// Feature: local-knowledge-base, Property 5: FQA 解析鲁棒性
-// Feature: local-knowledge-base, Property 6: FQA 追加保序性
-// Feature: local-knowledge-base, Property 7: 查询优先级阈值决策
-// Feature: local-knowledge-base, Property 8: 空白查询拒绝
-// Feature: local-knowledge-base, Property 9: 中文句子边界切分
-// Feature: local-knowledge-base, Property 10: 增量同步一致性
-// Feature: local-knowledge-base, Property 11: 无效命令处理
-// Feature: local-knowledge-base, Property 12: Embedding 维度不变量
-// Feature: local-knowledge-base, Property 13: 向量存储幂等性与元数据完整性
-```
+**FQAManager 测试：**
+- 使用临时文件进行 I/O 测试
+- 属性测试覆盖：round-trip、无效行过滤
+- 单元测试覆盖：文件创建、I/O 错误处理
 
-### 集成测试重点
-
-- scan 命令完整流程（需要本地 ChromaDB 实例）
-- query 命令 FQA 优先级策略
-- rebuild 命令全量重建流程
-- 中文文档端到端处理验证
-
-### Mock 策略
-
-- **Embedding_Engine**: 对于非 Property 12 的测试，使用固定维度随机向量 mock
-- **ChromaDB**: 对于属性测试，使用内存 Map 模拟 Vector_Store 接口
-- **文件系统**: 对于 File_Scanner 属性测试，使用 mock-fs 或临时目录
-- **officeparser/pdf.js-extract**: 对于切块属性测试，直接传入文本字符串绕过文件提取
+**SyncManager 测试：**
+- 使用 MagicMock 隔离所有依赖模块
+- 单元测试覆盖：增量同步各场景、全量重建、回滚机制
+- 集成测试覆盖：端到端同步流程
