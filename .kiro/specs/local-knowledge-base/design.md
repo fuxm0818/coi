@@ -485,7 +485,7 @@ from hypothesis import given, settings, strategies as st
 @settings(max_examples=100)
 @given(...)
 def test_property_name(...):
-    # Feature: local-knowledge-base, Property N: <property_text>
+    # Feature: local-knowledge-skill, Property N: <property_text>
     ...
 ```
 

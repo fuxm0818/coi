@@ -1,4 +1,4 @@
-# local-knowledge-base
+# local-knowledge-skill
 
 本地知识库 RAG Skill —— 对本地文档进行向量化索引与语义检索问答。
 
@@ -12,14 +12,14 @@
 
 ## 使用方式
 
-将 `local-knowledge-base/` 目录作为 skill 安装到支持 skill 的智能体中（如 Claude Code、LobeHub 等）。
+将 `local-knowledge-skill/` 目录作为 skill 安装到支持 skill 的智能体中（如 Claude Code、LobeHub 等）。
 
 智能体会自动根据用户意图触发此 skill，并通过内置脚本完成文档索引和查询操作。
 
 ## 目录结构
 
 ```
-local-knowledge-base/
+local-knowledge-skill/
 ├── SKILL.md              # Skill 说明文档
 ├── scripts/              # 可执行脚本
 │   ├── kb.py             # 主入口（scan/query/rebuild/fqa）
