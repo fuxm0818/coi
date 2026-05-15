@@ -3,7 +3,7 @@
 import os
 from typing import Dict
 
-from src.models import FileChange, ScanResult
+from models import FileChange, ScanResult
 
 # 支持的文件扩展名集合
 SUPPORTED_EXTENSIONS = {".txt", ".md", ".doc", ".docx", ".xls", ".xlsx", ".pdf"}

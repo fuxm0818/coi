@@ -5,7 +5,7 @@ from typing import Dict, List, Union
 import chromadb
 import numpy as np
 
-from src.models import ChunkMetadata, SearchResult
+from models import ChunkMetadata, SearchResult
 
 
 class VectorStore:

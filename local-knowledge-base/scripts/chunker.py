@@ -4,7 +4,7 @@ import logging
 import os
 from typing import List, Optional
 
-from src.models import Chunk
+from models import Chunk
 
 logger = logging.getLogger(__name__)
 

@@ -9,11 +9,11 @@ import hashlib
 import logging
 from typing import Dict, List
 
-from src.chunker import TextChunker
-from src.embedding import EmbeddingEngine
-from src.models import ChunkMetadata, FileChange
-from src.scanner import FileScanner
-from src.store import VectorStore
+from chunker import TextChunker
+from embedding import EmbeddingEngine
+from models import ChunkMetadata, FileChange
+from scanner import FileScanner
+from store import VectorStore
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +53,7 @@ class SyncManager:
             folder_path: 知识库文件夹路径
 
         Returns:
-            统计摘要字典，包含 keys:
-            - added: 新增文件数
-            - modified: 修改文件数
-            - deleted: 删除文件数
-            - unchanged: 未变更文件数
-            - failed: 失败文件数
-            - total_chunks: 本次处理的总 chunk 数
-            - errors: 错误列表，每项为 {path, reason}
+            统计摘要字典
         """
         stats = {
             "added": 0,
@@ -152,20 +145,13 @@ class SyncManager:
         return stats
 
     def _process_added(self, change: FileChange, folder_path: str, stats: dict) -> None:
-        """处理新增文件：提取文本 → 切块 → 向量化 → 存储
-
-        Args:
-            change: 文件变更记录
-            folder_path: 知识库文件夹路径
-            stats: 统计字典（会被修改）
-        """
+        """处理新增文件：提取文本 → 切块 → 向量化 → 存储"""
         try:
             chunks_stored = self._extract_chunk_embed_store(change)
             if chunks_stored > 0:
                 stats["added"] += 1
                 stats["total_chunks"] += chunks_stored
             else:
-                # 文件内容为空或提取失败，记录为失败
                 stats["failed"] += 1
                 stats["errors"].append({
                     "path": change.file_path,
@@ -180,13 +166,7 @@ class SyncManager:
             logger.error("处理新增文件失败 [%s]: %s", change.file_path, str(e))
 
     def _process_modified(self, change: FileChange, folder_path: str, stats: dict) -> None:
-        """处理修改文件：备份旧记录 → 删除旧记录 → 重新处理 → 失败时回滚
-
-        Args:
-            change: 文件变更记录
-            folder_path: 知识库文件夹路径
-            stats: 统计字典（会被修改）
-        """
+        """处理修改文件：备份旧记录 → 删除旧记录 → 重新处理 → 失败时回滚"""
         # Step 1: 备份旧记录
         backup = self._get_file_records_backup(change.file_path)
 
@@ -194,7 +174,6 @@ class SyncManager:
         try:
             self.vector_store.delete_by_file_path(change.file_path)
         except Exception as e:
-            # 删除失败，不需要回滚（旧记录仍在）
             stats["failed"] += 1
             stats["errors"].append({
                 "path": change.file_path,
@@ -210,7 +189,6 @@ class SyncManager:
                 stats["modified"] += 1
                 stats["total_chunks"] += chunks_stored
             else:
-                # 新内容为空，回滚
                 self._restore_backup(backup)
                 stats["failed"] += 1
                 stats["errors"].append({
@@ -235,12 +213,7 @@ class SyncManager:
             })
 
     def _process_deleted(self, change: FileChange, stats: dict) -> None:
-        """处理删除文件：删除对应向量记录
-
-        Args:
-            change: 文件变更记录
-            stats: 统计字典（会被修改）
-        """
+        """处理删除文件：删除对应向量记录"""
         try:
             self.vector_store.delete_by_file_path(change.file_path)
             stats["deleted"] += 1
@@ -255,14 +228,8 @@ class SyncManager:
     def _extract_chunk_embed_store(self, change: FileChange) -> int:
         """提取文本 → 切块 → 向量化 → 存储
 
-        Args:
-            change: 文件变更记录
-
         Returns:
             成功存储的 chunk 数量
-
-        Raises:
-            Exception: 处理过程中的任何异常
         """
         # 提取文本
         text = self.text_chunker.extract_text(change.absolute_path)
@@ -281,21 +248,14 @@ class SyncManager:
         stored_count = 0
         for chunk in chunks:
             try:
-                # 向量化
                 vector = self.embedding_engine.embed(chunk.text)
-
-                # 构建元数据
                 metadata = ChunkMetadata(
                     file_path=change.file_path,
                     file_hash=file_hash,
                     chunk_index=chunk.index,
                     last_modified=change.last_modified,
                 )
-
-                # 构建 ID
                 record_id = f"{change.file_path}::{chunk.index}"
-
-                # 存储
                 self.vector_store.upsert(record_id, vector, chunk.text, metadata)
                 stored_count += 1
             except Exception as e:
@@ -305,20 +265,12 @@ class SyncManager:
                     chunk.index,
                     str(e),
                 )
-                # 单个 chunk 失败时继续处理剩余 chunk
                 continue
 
         return stored_count
 
     def _compute_file_hash(self, file_path: str) -> str:
-        """计算文件内容的 SHA-256 哈希
-
-        Args:
-            file_path: 文件绝对路径
-
-        Returns:
-            SHA-256 哈希字符串（十六进制）
-        """
+        """计算文件内容的 SHA-256 哈希"""
         sha256 = hashlib.sha256()
         with open(file_path, "rb") as f:
             for block in iter(lambda: f.read(8192), b""):
@@ -326,14 +278,7 @@ class SyncManager:
         return sha256.hexdigest()
 
     def _get_file_records_backup(self, file_path: str) -> dict:
-        """获取指定文件的所有向量记录备份
-
-        Args:
-            file_path: 源文件相对路径
-
-        Returns:
-            备份字典，包含 ids, embeddings, documents, metadatas
-        """
+        """获取指定文件的所有向量记录备份"""
         collection = self.vector_store._collection
         try:
             results = collection.get(
@@ -351,11 +296,7 @@ class SyncManager:
             return {"ids": [], "embeddings": [], "documents": [], "metadatas": []}
 
     def _restore_backup(self, backup: dict) -> None:
-        """恢复备份的向量记录
-
-        Args:
-            backup: 备份字典，包含 ids, embeddings, documents, metadatas
-        """
+        """恢复备份的向量记录"""
         if not backup["ids"]:
             return
 

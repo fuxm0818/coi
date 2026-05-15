@@ -6,10 +6,10 @@
 
 import logging
 
-from src.embedding import EmbeddingEngine
-from src.fqa import FQAManager
-from src.models import QueryResult
-from src.store import VectorStore
+from embedding import EmbeddingEngine
+from fqa import FQAManager
+from models import QueryResult
+from store import VectorStore
 
 logger = logging.getLogger(__name__)
 

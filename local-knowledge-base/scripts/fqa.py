@@ -11,7 +11,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from src.models import FQAPair
+from models import FQAPair
 
 logger = logging.getLogger(__name__)
 

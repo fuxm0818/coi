@@ -1,19 +1,24 @@
+#!/usr/bin/env python3
 """CLI 入口与命令定义
 
 使用 Click 框架定义 CLI 命令组，支持 scan、query、rebuild、fqa 子命令。
 所有模块根据全局选项初始化，通过 Click context 传递配置。
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import click
 
-from src.chunker import TextChunker
-from src.embedding import EmbeddingEngine
-from src.fqa import FQAManager
-from src.models import CLIConfig
-from src.query import QueryEngine
-from src.scanner import FileScanner
-from src.store import VectorStore
-from src.sync import SyncManager
+from chunker import TextChunker
+from embedding import EmbeddingEngine
+from fqa import FQAManager
+from models import CLIConfig
+from query import QueryEngine
+from scanner import FileScanner
+from store import VectorStore
+from sync import SyncManager
 
 
 @click.group()
