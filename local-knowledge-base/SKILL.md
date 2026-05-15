@@ -27,6 +27,18 @@ python3 <SKILL_PATH>/scripts/setup_env.py
 
 首次执行 scan 或 query 时会自动下载 Embedding 模型（约 470MB），这是一次性操作。
 
+## 触发后的第一步：自动同步
+
+每次此 skill 被触发时，无论用户的具体意图是什么（查询、纠错、或其他），第一步都要先执行增量同步，确保向量库反映文件夹的最新状态。这一步很快——如果没有文件变更，几乎瞬间完成。
+
+```bash
+python3 <SKILL_PATH>/scripts/kb.py scan --folder <知识库文件夹路径>
+```
+
+只有同步完成后，才继续执行用户的实际请求（查询、纠错等）。这样用户永远基于最新的文件内容获得答案，不会出现"加了新文件但查不到"的问题。
+
+如果用户还没有指定过知识库文件夹路径，先询问用户文件夹在哪里。
+
 ## 命令用法
 
 所有命令通过 `python3 <SKILL_PATH>/scripts/kb.py` 执行。以下用 `kb.py` 简写。
@@ -84,18 +96,22 @@ python3 <SKILL_PATH>/scripts/kb.py fqa --add "问题=答案"
 # 1. 安装依赖（仅首次）
 python3 <SKILL_PATH>/scripts/setup_env.py
 
-# 2. 索引文档
+# 2. 首次索引文档（后续每次触发 skill 时自动执行）
 python3 <SKILL_PATH>/scripts/kb.py scan --folder ./my_docs
 
-# 3. 查询
+# 3. 查询（scan 已在前一步自动完成）
 python3 <SKILL_PATH>/scripts/kb.py query "公司的退货政策是什么"
 
 # 4. 纠错
 python3 <SKILL_PATH>/scripts/kb.py fqa --add "退货期限=收货后7天内可申请退货"
 
-# 5. 文档更新后增量同步
-python3 <SKILL_PATH>/scripts/kb.py scan --folder ./my_docs
+# 5. 全量重建（仅在数据异常时使用）
+python3 <SKILL_PATH>/scripts/kb.py rebuild --folder ./my_docs
 ```
+
+每次 skill 被触发时的执行顺序：
+1. 先 `scan`（自动增量同步，确保最新）
+2. 再执行用户的实际请求（query / fqa / rebuild）
 
 ## 注意事项
 
