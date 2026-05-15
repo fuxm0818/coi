@@ -345,11 +345,38 @@ def rebuild(ctx, folder):
 
 
 @cli.command()
-@click.option("--add", required=True, help='要添加的问答对，格式为"问题=答案"')
+@click.option("--add", default=None, help='添加问答对，格式为"问题=答案"')
+@click.option("--list", "list_all", is_flag=True, default=False, help="列出所有 FQA 记录")
 @click.pass_context
-def fqa(ctx, add):
-    """管理 FQA 问答对。"""
+def fqa(ctx, add, list_all):
+    """管理 FQA 问答对：添加或列出人工纠错记录。"""
     config = ctx.obj["config"]
+    fqa_manager = FQAManager(fqa_file_path=config.fqa_file_path)
+
+    if list_all:
+        try:
+            pairs = fqa_manager.load()
+        except RuntimeError as e:
+            click.echo(f"错误: {e}", err=True)
+            ctx.exit(1)
+            return
+
+        if not pairs:
+            click.echo("FQA 记录为空，尚未添加任何人工纠错答案。")
+            return
+
+        click.echo(f"共 {len(pairs)} 条 FQA 记录：")
+        click.echo()
+        for i, pair in enumerate(pairs, 1):
+            click.echo(f"{i}. 问: {pair.question}")
+            click.echo(f"   答: {pair.answer}")
+            click.echo()
+        return
+
+    if not add:
+        click.echo("错误: 请使用 --add 添加记录或 --list 列出所有记录", err=True)
+        ctx.exit(1)
+        return
 
     if "=" not in add:
         click.echo('错误: 格式不正确，请使用"问题=答案"格式', err=True)
@@ -367,8 +394,6 @@ def fqa(ctx, add):
         click.echo("错误: 答案不能为空", err=True)
         ctx.exit(1)
         return
-
-    fqa_manager = FQAManager(fqa_file_path=config.fqa_file_path)
 
     try:
         fqa_manager.append(question, answer)
