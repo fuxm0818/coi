@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """CLI 入口与命令定义
 
-使用 Click 框架定义 CLI 命令组，支持 scan、query、rebuild、fqa 子命令。
+使用 Click 框架定义 CLI 命令组，支持 init、scan、query、rebuild、fqa 子命令。
 所有模块根据全局选项初始化，通过 Click context 传递配置。
+支持通过 ~/.kb_config.json 持久化用户配置（知识库路径等）。
 """
 
 import sys
 import os
+import json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import click
@@ -19,6 +21,51 @@ from query import QueryEngine
 from scanner import FileScanner
 from store import VectorStore
 from sync import SyncManager
+
+# 用户配置文件路径
+CONFIG_FILE = os.path.expanduser("~/.kb_config.json")
+
+
+def _load_user_config() -> dict:
+    """加载用户持久化配置"""
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _save_user_config(config: dict) -> None:
+    """保存用户持久化配置"""
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+
+
+def _get_folder(folder_option: str = None) -> str:
+    """获取知识库文件夹路径：优先使用命令行参数，其次读取配置文件。
+
+    Args:
+        folder_option: 命令行传入的 --folder 值（可能为 None）
+
+    Returns:
+        知识库文件夹的绝对路径
+
+    Raises:
+        click.UsageError: 既没有传参也没有配置时
+    """
+    if folder_option:
+        return os.path.abspath(folder_option)
+
+    user_config = _load_user_config()
+    if "knowledge_folder" in user_config:
+        return user_config["knowledge_folder"]
+
+    raise click.UsageError(
+        "未指定知识库文件夹路径。请先运行 'kb.py init --folder <路径>' 初始化，"
+        "或使用 --folder 参数指定路径。"
+    )
 
 
 @click.group()
@@ -140,9 +187,43 @@ def _init_modules(config: CLIConfig):
 @cli.command()
 @click.option("--folder", required=True, help="知识库文件夹路径")
 @click.pass_context
+def init(ctx, folder):
+    """初始化知识库配置，记住文件夹路径。后续命令无需再指定 --folder。"""
+    folder_path = os.path.abspath(folder)
+
+    if not os.path.exists(folder_path):
+        click.echo(f"错误: 路径不存在: {folder_path}", err=True)
+        ctx.exit(1)
+        return
+
+    if not os.path.isdir(folder_path):
+        click.echo(f"错误: 路径不是目录: {folder_path}", err=True)
+        ctx.exit(1)
+        return
+
+    user_config = _load_user_config()
+    user_config["knowledge_folder"] = folder_path
+    _save_user_config(user_config)
+
+    click.echo(f"知识库配置已保存：")
+    click.echo(f"  文件夹路径: {folder_path}")
+    click.echo(f"  配置文件: {CONFIG_FILE}")
+    click.echo(f"\n后续使用 scan/query/rebuild 时无需再指定 --folder。")
+
+
+@cli.command()
+@click.option("--folder", default=None, help="知识库文件夹路径（已初始化时可省略）")
+@click.pass_context
 def scan(ctx, folder):
     """扫描知识库文件夹，检测文件变更并增量更新向量索引。"""
     config = ctx.obj["config"]
+
+    try:
+        folder_path = _get_folder(folder)
+    except click.UsageError as e:
+        click.echo(f"错误: {e}", err=True)
+        ctx.exit(1)
+        return
 
     try:
         modules = _init_modules(config)
@@ -154,7 +235,7 @@ def scan(ctx, folder):
     sync_manager = modules["sync_manager"]
 
     try:
-        stats = sync_manager.incremental_sync(folder)
+        stats = sync_manager.incremental_sync(folder_path)
     except (FileNotFoundError, NotADirectoryError) as e:
         click.echo(f"错误: {e}", err=True)
         ctx.exit(1)
@@ -216,11 +297,18 @@ def query(ctx, question):
 
 
 @cli.command()
-@click.option("--folder", required=True, help="知识库文件夹路径")
+@click.option("--folder", default=None, help="知识库文件夹路径（已初始化时可省略）")
 @click.pass_context
 def rebuild(ctx, folder):
     """删除所有现有向量记录，重新扫描并索引知识库文件夹中的所有文件。"""
     config = ctx.obj["config"]
+
+    try:
+        folder_path = _get_folder(folder)
+    except click.UsageError as e:
+        click.echo(f"错误: {e}", err=True)
+        ctx.exit(1)
+        return
 
     try:
         modules = _init_modules(config)
@@ -240,7 +328,7 @@ def rebuild(ctx, folder):
         return
 
     try:
-        stats = sync_manager.full_rebuild(folder)
+        stats = sync_manager.full_rebuild(folder_path)
     except (FileNotFoundError, NotADirectoryError) as e:
         click.echo(f"错误: {e}", err=True)
         ctx.exit(1)
