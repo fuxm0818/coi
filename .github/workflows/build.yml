@@ -1,0 +1,102 @@
+name: Build COI Executables
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            artifact_name: coi-linux
+            asset_name: coi-linux.tar.gz
+          - os: macos-latest
+            platform: macos
+            artifact_name: coi-macos
+            asset_name: coi-macos.tar.gz
+          - os: windows-latest
+            platform: windows
+            artifact_name: coi-windows
+            asset_name: coi-windows.zip
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: coi
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Download embedding model
+        working-directory: coi
+        run: python download_model.py
+        timeout-minutes: 30
+
+      - name: Build executable
+        working-directory: coi
+        run: python build.py
+
+      - name: Package artifact (Linux/macOS)
+        if: matrix.platform != 'windows'
+        working-directory: coi/dist
+        run: |
+          chmod +x coi
+          tar -czf ${{ matrix.asset_name }} coi
+
+      - name: Package artifact (Windows)
+        if: matrix.platform == 'windows'
+        working-directory: coi/dist
+        shell: pwsh
+        run: |
+          Compress-Archive -Path coi.exe -DestinationPath ${{ matrix.asset_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: coi/dist/${{ matrix.asset_name }}
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: List downloaded files
+        run: find release-assets -type f
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/coi-linux/coi-linux.tar.gz
+            release-assets/coi-macos/coi-macos.tar.gz
+            release-assets/coi-windows/coi-windows.zip
+          generate_release_notes: true
+          draft: false

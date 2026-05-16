@@ -1,3 +1,4 @@
+# COI 运行时依赖
 click>=8.1.0
 chromadb>=0.4.0
 sentence-transformers>=2.2.0
