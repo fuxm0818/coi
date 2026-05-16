@@ -65,7 +65,6 @@ def build():
         "--hidden-import", "chromadb.segment.impl",
         # 隐式导入 - ML 依赖
         "--hidden-import", "sentence_transformers",
-        "--hidden-import", "sentence_transformers.models",
         "--hidden-import", "torch",
         "--hidden-import", "torch.nn",
         "--hidden-import", "torch.nn.functional",
@@ -93,6 +92,13 @@ def build():
         "--exclude-module", "jupyter",
         "--exclude-module", "notebook",
         "--exclude-module", "tensorboard",
+        "--exclude-module", "triton",
+        "--exclude-module", "nvidia",
+        "--exclude-module", "cuda",
+        "--exclude-module", "cupti",
+        "--exclude-module", "onnxruntime",
+        "--exclude-module", "sklearn",
+        "--exclude-module", "sympy",
         # 入口脚本
         main_script,
     ]
