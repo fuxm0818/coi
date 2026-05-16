@@ -39,6 +39,10 @@ jobs:
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /opt/ghc
           sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+          sudo apt-get clean
           df -h
 
       - name: Set up Python
@@ -47,14 +51,16 @@ jobs:
           python-version: '3.11'
 
       - name: Install PyTorch CPU-only
-        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install dependencies
         working-directory: coi
         run: |
-          pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
+
+      - name: Check disk space
+        run: df -h
 
       - name: Download embedding model
         working-directory: coi
@@ -73,15 +79,15 @@ jobs:
         if: matrix.platform != 'windows'
         working-directory: coi/dist
         run: |
-          chmod +x coi
-          tar -czf ${{ matrix.asset_name }} coi
+          chmod +x coi/coi
+          tar -czf ${{ matrix.asset_name }} coi/
 
       - name: Package artifact (Windows)
         if: matrix.platform == 'windows'
         working-directory: coi/dist
         shell: pwsh
         run: |
-          Compress-Archive -Path coi.exe -DestinationPath ${{ matrix.asset_name }}
+          Compress-Archive -Path coi -DestinationPath ${{ matrix.asset_name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

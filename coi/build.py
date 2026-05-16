@@ -45,10 +45,10 @@ def build():
     sep = ";" if system == "windows" else ":"
     add_data_arg = f"{model_dir}{sep}model"
 
-    # PyInstaller 参数
+    # PyInstaller 参数（使用 --onedir 模式避免磁盘空间不足）
     args = [
         sys.executable, "-m", "PyInstaller",
-        "--onefile",
+        "--onedir",
         "--name", "coi",
         "--clean",
         "--noconfirm",
@@ -113,15 +113,16 @@ def build():
     result = subprocess.run(args, cwd=script_dir)
 
     if result.returncode == 0:
-        dist_path = os.path.join(script_dir, "dist", output_name)
-        size_mb = os.path.getsize(dist_path) / (1024 * 1024)
+        dist_dir = os.path.join(script_dir, "dist", "coi")
         print(f"\n[COI Build] 打包成功！")
-        print(f"  可执行文件: {dist_path}")
-        print(f"  文件大小: {size_mb:.1f} MB")
+        print(f"  输出目录: {dist_dir}")
         print(f"\n  使用方式:")
-        print(f"    ./dist/coi init /path/to/docs")
-        print(f'    ./dist/coi ask "你的问题"')
-        print(f"\n  注意: 首次启动需解压模型，可能需要 10-30 秒。")
+        if system == "windows":
+            print(f"    .\\dist\\coi\\coi.exe init C:\\path\\to\\docs")
+            print(f'    .\\dist\\coi\\coi.exe ask "你的问题"')
+        else:
+            print(f"    ./dist/coi/coi init /path/to/docs")
+            print(f'    ./dist/coi/coi ask "你的问题"')
     else:
         print(f"\n[COI Build] 打包失败，退出码: {result.returncode}")
         sys.exit(1)
