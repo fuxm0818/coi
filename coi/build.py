@@ -38,8 +38,19 @@ def build():
         sys.exit(1)
 
     system = platform.system().lower()
+    machine = platform.machine().lower()
     sep = ";" if system == "windows" else ":"
     output_name = "coi.exe" if system == "windows" else "coi"
+
+    # macOS 交叉编译支持
+    # 设置 ARCHFLAGS 环境变量来指定目标架构
+    env = os.environ.copy()
+    if system == "darwin":
+        # 检查是否需要交叉编译
+        target_arch = os.environ.get("COI_TARGET_ARCH", machine)
+        if target_arch != machine:
+            env["ARCHFLAGS"] = f"-arch {target_arch}"
+            print(f"[COI Build] Cross-compiling for {target_arch} on {machine}")
 
     # PyInstaller 参数 - onefile 模式，单文件分发
     args = [
@@ -86,7 +97,7 @@ def build():
     print(f"[COI Build] Output: dist/{output_name}")
     print()
 
-    result = subprocess.run(args, cwd=script_dir)
+    result = subprocess.run(args, cwd=script_dir, env=env)
 
     if result.returncode != 0:
         print(f"\n[COI Build] Failed, exit code: {result.returncode}")
