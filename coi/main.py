@@ -30,14 +30,33 @@ from config import (
 from models import ChunkMetadata
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.version_option(version="1.0.0", prog_name="COI（我问你答）")
-def cli():
+@click.pass_context
+def cli(ctx):
     """COI（我问你答）- 本地离线文档问答工具
 
-    纯本地运行，零网络依赖，所有数据存储于程序同级 coi_data/ 目录。
+    纯本地独立运行，不调用任何外部大模型、不上网、无网络请求。
+    所有数据存储于程序同级 coi_data/ 目录，结构透明可管理。
+
+    \b
+    支持文档格式：TXT、MD、PDF、DOCX、XLSX、CSV
+
+    \b
+    使用流程：
+      1. coi init <文档目录>     首次初始化，全量构建向量库
+      2. coi ask "你的问题"      提问（秒级响应，不重建）
+      3. coi add-fqa "问题" "答案"  补充标准答案
+      4. coi clear               清空所有数据
+
+    \b
+    示例：
+      coi init ~/Documents/公司文档
+      coi ask "报销流程是什么"
+      coi add-fqa "报销期限" "费用发生后30天内提交"
     """
-    pass
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
 
 
 @cli.command()
