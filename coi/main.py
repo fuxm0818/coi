@@ -30,8 +30,11 @@ from config import (
 from models import ChunkMetadata
 
 
+__version__ = "1.0.0"
+
+
 @click.group(invoke_without_command=True)
-@click.version_option(version="1.0.0", prog_name="COI（我问你答）")
+@click.version_option(version=__version__, prog_name="COI（我问你答）")
 @click.pass_context
 def cli(ctx):
     """COI（我问你答）- 本地离线文档问答工具
