@@ -25,79 +25,99 @@ description: "我问你答（COI）本地离线文档问答工具。当用户提
 
 ## 当用户要使用此工具时
 
-按以下顺序执行：
+### 第 1 步：检查是否已安装（按顺序尝试以下路径）
 
-### 第 1 步：检查是否已安装
+COI 可能已经安装在以下位置之一，按顺序检查：
 
 ```bash
-coi --help
+# 检查是否在 PATH 中
+which coi 2>/dev/null || where coi 2>/dev/null
+
+# 检查常见安装位置
+ls /usr/local/bin/coi 2>/dev/null
+ls ~/.local/bin/coi 2>/dev/null
+ls ~/coi 2>/dev/null
+ls ./coi 2>/dev/null
 ```
 
-- 输出帮助信息 → 已安装，跳到第 3 步
-- command not found → 执行第 2 步
+**只要在任何位置找到了 coi 可执行文件，就不需要重新下载。** 记住找到的路径，后续直接用该路径执行。
 
-### 第 2 步：下载安装
+如果所有位置都找不到 → 执行第 2 步下载安装。
+
+### 第 2 步：下载安装（仅在第 1 步确认不存在时执行）
 
 GitHub 仓库：https://github.com/fuxm0818/coi
 
-先用 GitHub API 获取最新版本的下载地址：
-
-```bash
-curl -s https://api.github.com/repos/fuxm0818/coi/releases/latest | grep "browser_download_url"
-```
-
-然后根据当前平台下载对应文件：
+**安装到固定位置（避免每次会话重复下载）：**
 
 **Linux：**
 ```bash
-curl -L "https://github.com/fuxm0818/coi/releases/latest/download/coi-linux" -o ./coi
-chmod +x ./coi
-./coi --help
+mkdir -p ~/.local/bin
+curl -L "https://github.com/fuxm0818/coi/releases/latest/download/coi-linux" -o ~/.local/bin/coi
+chmod +x ~/.local/bin/coi
+~/.local/bin/coi --help
 ```
 
 **macOS：**
 ```bash
-curl -L "https://github.com/fuxm0818/coi/releases/latest/download/coi-macos" -o ./coi
-chmod +x ./coi
-xattr -d com.apple.quarantine ./coi 2>/dev/null
-./coi --help
+mkdir -p ~/.local/bin
+curl -L "https://github.com/fuxm0818/coi/releases/latest/download/coi-macos" -o ~/.local/bin/coi
+chmod +x ~/.local/bin/coi
+xattr -d com.apple.quarantine ~/.local/bin/coi 2>/dev/null
+~/.local/bin/coi --help
 ```
 
 **Windows（PowerShell）：**
 ```powershell
-Invoke-WebRequest -Uri "https://github.com/fuxm0818/coi/releases/latest/download/coi-windows.exe" -OutFile ".\coi.exe"
-.\coi.exe --help
+$coiDir = "$env:LOCALAPPDATA\coi"
+New-Item -ItemType Directory -Force -Path $coiDir | Out-Null
+Invoke-WebRequest -Uri "https://github.com/fuxm0818/coi/releases/latest/download/coi-windows.exe" -OutFile "$coiDir\coi.exe"
+& "$coiDir\coi.exe" --help
 ```
 
-注意事项：
-- 优先下载到当前工作目录（避免权限问题）
-- 下载后必须验证 `./coi --help` 输出正常
-- 如果下载失败（404 或网络错误），告诉用户手动从 https://github.com/fuxm0818/coi/releases 下载
-- 使用 `-L` 参数跟随重定向（GitHub 下载链接会 302 跳转）
+安装完成后验证 `--help` 输出正常。
 
-### 第 3 步：询问文档路径
-
-对用户说：**「请告诉我你的文档文件夹路径，我来帮你构建知识库。」**
-
-等待用户回复。
-
-### 第 4 步：初始化知识库
+### 第 3 步：检查是否已有知识库
 
 ```bash
-./coi init <用户提供的路径>
+coi ask "测试"
 ```
 
-将输出展示给用户，确认成功。如果报错「路径不存在」，请用户重新确认路径。
+- 如果返回检索结果 → 知识库已存在，直接跳到第 5 步回答用户问题
+- 如果报错「尚未初始化」→ 执行第 4 步
 
-### 第 5 步：问答
+### 第 4 步：初始化知识库（仅在没有知识库时执行）
 
-用户每次提问时执行：
+询问用户：**「请告诉我你的文档文件夹路径，我来帮你构建知识库。」**
+
+等待用户提供路径后执行：
 
 ```bash
-./coi ask "用户的问题"
+coi init <用户提供的路径>
 ```
 
-将结果展示给用户。
+### 第 5 步：回答用户问题
+
+```bash
+coi ask "用户的问题"
+```
+
+将结果展示给用户。每次用户提新问题，重复执行此命令。
+
+---
+
+## 执行流程总结
+
+```
+触发 skill
+  → 找到 coi 可执行文件了吗？
+     是 → 知识库存在吗？（试执行 coi ask "测试"）
+            是 → 直接回答用户问题
+            否 → 问用户要文档路径 → init → 回答问题
+     否 → 下载安装到 ~/.local/bin → 问用户要文档路径 → init → 回答问题
+```
+
+**核心原则：不要重复做已经做过的事。已安装就不下载，已初始化就不重新 init。**
 
 ---
 
@@ -105,15 +125,16 @@ Invoke-WebRequest -Uri "https://github.com/fuxm0818/coi/releases/latest/download
 
 | 用户意图 | 执行命令 | 说明 |
 | -------- | -------- | ---- |
-| 补充标准答案 | `./coi add-fqa "问题" "答案"` | 下次相似提问会优先返回此答案 |
-| 清空重来 | `./coi clear --yes` | 清空后需重新 init |
-| 文档有更新 | `./coi init <路径>` | 重新执行 init 覆盖旧库 |
+| 补充标准答案 | `coi add-fqa "问题" "答案"` | 下次相似提问会优先返回此答案 |
+| 清空重来 | `coi clear --yes` | 清空后需重新 init |
+| 文档有更新 | `coi init <路径>` | 重新执行 init 覆盖旧库 |
 
 ---
 
 ## 关键规则
 
-- `ask` 只读缓存，不扫描不重建，所以很快
+- `coi ask` 只读缓存，不扫描不重建，所以很快
 - 所有数据在 coi 同级的 `coi_data/` 目录
 - 安装完成后完全离线，不需要网络
-- 用户没有明确要使用时，不要自动开始安装流程
+- **不要每次会话都重新下载安装，先检查是否已存在**
+- **不要每次都重新 init，先检查知识库是否已存在**
