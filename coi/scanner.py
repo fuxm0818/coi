@@ -9,7 +9,7 @@ import os
 from models import FileChange, ScanResult
 
 # 支持的文件扩展名（小写）
-SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".xlsx", ".csv", ".pptx", ".ppt"}
+SUPPORTED_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv", ".pptx", ".ppt", ".rtf"}
 
 
 class FileScanner:

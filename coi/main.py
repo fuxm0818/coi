@@ -134,44 +134,47 @@ def init(folder):
 
     click.echo(f"  发现 {total_files} 个文档文件")
 
-    # 6. 全量向量化
+    # 6. 全量向量化（并发优化）
     click.echo(f"\n[COI] 正在构建向量库...")
     from chunker import TextChunker
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import threading
 
     text_chunker = TextChunker(
         tokenizer=embedding_engine.get_tokenizer(),
     )
 
-    success_count = 0
-    chunk_count = 0
-    failed_files = []
+    excel_lock = threading.Lock()
+    file_locks = {}
+    file_locks_lock = threading.Lock()
 
-    for i, change in enumerate(scan_result.changes, 1):
-        click.echo(f"  [{i}/{total_files}] {change.file_path}", nl=False)
+    def get_file_lock(file_path):
+        """获取或创建文件专属锁"""
+        with file_locks_lock:
+            if file_path not in file_locks:
+                file_locks[file_path] = threading.Lock()
+            return file_locks[file_path]
 
+    def process_file(change):
+        """处理单个文件，返回结果元组 (success, chunk_count, error_reason)"""
         try:
-            # 提取文本
-            text = text_chunker.extract_text(change.absolute_path)
-            if text is None:
-                click.echo(" - 跳过（内容为空）")
-                failed_files.append({"path": change.file_path, "reason": "内容为空"})
-                continue
+            file_lock = get_file_lock(change.absolute_path)
 
-            # 切块
-            chunks = text_chunker.chunk(text, change.file_path)
-            if not chunks:
-                click.echo(" - 跳过（切块为空）")
-                failed_files.append({"path": change.file_path, "reason": "切块为空"})
-                continue
+            with file_lock:
+                text = text_chunker.extract_text(change.absolute_path)
+                if text is None:
+                    return (False, 0, "内容为空")
 
-            # 计算文件哈希
+                chunks = text_chunker.chunk(text, change.file_path)
+                if not chunks:
+                    return (False, 0, "切块为空")
+
             sha256 = hashlib.sha256()
             with open(change.absolute_path, "rb") as f:
                 for block in iter(lambda: f.read(8192), b""):
                     sha256.update(block)
             file_hash = sha256.hexdigest()
 
-            # 向量化并存储
             file_chunks = 0
             for chunk in chunks:
                 vector = embedding_engine.embed(chunk.text)
@@ -185,13 +188,31 @@ def init(folder):
                 vector_store.upsert(record_id, vector, chunk.text, metadata)
                 file_chunks += 1
 
-            click.echo(f" - {file_chunks} 个文本块")
-            success_count += 1
-            chunk_count += file_chunks
-
+            return (True, file_chunks, None)
         except Exception as e:
-            click.echo(f" - 失败: {e}")
-            failed_files.append({"path": change.file_path, "reason": str(e)})
+            return (False, 0, str(e))
+
+    success_count = 0
+    chunk_count = 0
+    failed_files = []
+    total_files = len(scan_result.changes)
+
+    max_workers = min(4, total_files)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_change = {executor.submit(process_file, change): change for change in scan_result.changes}
+
+        for i, future in enumerate(as_completed(future_to_change), 1):
+            change = future_to_change[future]
+            success, file_chunks, error_reason = future.result()
+            
+            if success:
+                success_count += 1
+                chunk_count += file_chunks
+                click.echo(f"  [{i}/{total_files}] {change.file_path} - {file_chunks} 个文本块")
+            else:
+                failed_files.append({"path": change.file_path, "reason": error_reason})
+                click.echo(f"  [{i}/{total_files}] {change.file_path} - 跳过（{error_reason}）")
 
     # 7. 输出统计摘要
     click.echo(f"\n[COI] 初始化完成！")

@@ -35,33 +35,42 @@ class TextChunker:
         ".txt": "_extract_txt",
         ".md": "_extract_markdown",
         ".docx": "_extract_word",
+        ".doc": "_extract_word",
         ".xlsx": "_extract_excel",
+        ".xls": "_extract_excel",
         ".pdf": "_extract_pdf",
         ".csv": "_extract_csv",
         ".pptx": "_extract_ppt",
         ".ppt": "_extract_ppt",
+        ".rtf": "_extract_rtf",
     }
 
     _CHUNK_SIZE_BY_TYPE = {
         ".txt": 512,
         ".md": 512,
         ".docx": 512,
+        ".doc": 512,
         ".xlsx": 256,
+        ".xls": 256,
         ".pdf": 384,
         ".csv": 256,
         ".pptx": 512,
         ".ppt": 512,
+        ".rtf": 512,
     }
 
     _OVERLAP_BY_TYPE = {
         ".txt": 64,
         ".md": 64,
         ".docx": 64,
+        ".doc": 64,
         ".xlsx": 32,
+        ".xls": 32,
         ".pdf": 48,
         ".csv": 32,
         ".pptx": 64,
         ".ppt": 64,
+        ".rtf": 64,
     }
 
     _SENTENCE_BOUNDARIES = set("。！？；\n")
@@ -503,8 +512,19 @@ class TextChunker:
         return text
 
     def _extract_txt(self, file_path: str) -> Optional[str]:
-        """提取 TXT 文件（UTF-8）"""
-        with open(file_path, "r", encoding="utf-8") as f:
+        """提取 TXT 文件，尝试多种编码格式"""
+        encodings = ["utf-8", "gbk", "gb2312", "gb18030", "latin-1"]
+        
+        for encoding in encodings:
+            try:
+                with open(file_path, "r", encoding=encoding, errors="ignore") as f:
+                    content = f.read()
+                if content and content.strip():
+                    return content
+            except Exception:
+                continue
+        
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             return f.read()
 
     def _extract_markdown(self, file_path: str) -> Optional[str]:
@@ -561,43 +581,79 @@ class TextChunker:
             return None
 
     def _extract_excel(self, file_path: str) -> Optional[str]:
-        """提取 Excel (.xlsx) 文件，按行制表符分隔"""
+        """提取 Excel (.xlsx/.xls) 文件，按行制表符分隔"""
+        import os
         from openpyxl import load_workbook
 
-        wb = load_workbook(file_path, read_only=True, data_only=True)
-        all_text = []
+        file_size = os.path.getsize(file_path)
+        max_size = 5 * 1024 * 1024
 
-        for sheet in wb.worksheets:
-            for row in sheet.iter_rows():
-                cells = []
-                for cell in row:
-                    value = cell.value
-                    if value is not None:
-                        cells.append(str(value))
-                    else:
-                        cells.append("")
-                all_text.append("\t".join(cells))
+        if file_size > max_size:
+            logger.warning(f"Excel 文件过大 ({file_size / 1024 / 1024:.1f}MB)，跳过: {file_path}")
+            return None
 
-        wb.close()
-        return "\n".join(all_text)
+        try:
+            wb = load_workbook(file_path, read_only=True, data_only=True)
+            all_text = []
+            row_count = 0
+            max_rows = 50000
+
+            for sheet in wb.worksheets:
+                for row in sheet.iter_rows():
+                    if row_count >= max_rows:
+                        logger.warning(f"Excel 行数过多 ({max_rows})，截断: {file_path}")
+                        break
+                    cells = []
+                    for cell in row:
+                        value = cell.value
+                        if value is not None:
+                            cells.append(str(value))
+                        else:
+                            cells.append("")
+                    all_text.append("\t".join(cells))
+                    row_count += 1
+                if row_count >= max_rows:
+                    break
+
+            wb.close()
+            return "\n".join(all_text) if all_text else None
+        except Exception as e:
+            logger.error(f"Excel 提取失败 [{file_path}]: {e}")
+            return None
 
     def _extract_pdf(self, file_path: str) -> Optional[str]:
         """提取 PDF 文件，按页顺序拼接"""
+        import os
         from PyPDF2 import PdfReader
+
+        file_size = os.path.getsize(file_path)
+        max_size = 30 * 1024 * 1024
+
+        if file_size > max_size:
+            logger.warning(f"PDF 文件过大 ({file_size / 1024 / 1024:.1f}MB)，跳过: {file_path}")
+            return None
 
         try:
             reader = PdfReader(file_path)
-            pages_text = []
+            total_pages = len(reader.pages)
+            max_pages = 500
 
-            for page in reader.pages:
+            if total_pages > max_pages:
+                logger.warning(f"PDF 页数过多 ({total_pages})，截断到 {max_pages} 页: {file_path}")
+
+            pages_text = []
+            pages_to_process = min(total_pages, max_pages)
+
+            for i in range(pages_to_process):
                 try:
+                    page = reader.pages[i]
                     text = page.extract_text()
                     if text:
                         text = self._normalize_chinese_spacing(text)
                         if text.strip():
                             pages_text.append(text)
                 except Exception as e:
-                    logger.warning(f"PDF页面提取失败 [{file_path}]: {e}")
+                    logger.warning(f"PDF页面提取失败 [第{i+1}页] {file_path}: {e}")
                     continue
 
             return "\n".join(pages_text) if pages_text else None
@@ -632,12 +688,25 @@ class TextChunker:
 
     def _extract_csv(self, file_path: str) -> Optional[str]:
         """提取 CSV 文件（UTF-8），按行制表符分隔"""
+        import os
+
+        file_size = os.path.getsize(file_path)
+        max_size = 10 * 1024 * 1024
+
+        if file_size > max_size:
+            logger.warning(f"CSV 文件过大 ({file_size / 1024 / 1024:.1f}MB)，跳过: {file_path}")
+            return None
+
         rows = []
-        with open(file_path, "r", encoding="utf-8") as f:
+        max_rows = 10000
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             reader = csv.reader(f)
-            for row in reader:
+            for i, row in enumerate(reader):
+                if i >= max_rows:
+                    logger.warning(f"CSV 行数过多 ({max_rows})，截断: {file_path}")
+                    break
                 rows.append("\t".join(row))
-        return "\n".join(rows)
+        return "\n".join(rows) if rows else None
 
     def _extract_ppt(self, file_path: str) -> Optional[str]:
         """提取 PowerPoint (.pptx) 文件，按幻灯片顺序拼接文本"""
@@ -665,4 +734,38 @@ class TextChunker:
             return None
         except Exception as e:
             logger.error(f"PowerPoint 提取失败 [{file_path}]: {e}")
+            return None
+
+    def _extract_rtf(self, file_path: str) -> Optional[str]:
+        """提取 RTF 文件，支持纯文本和控制字词提取"""
+        try:
+            import re
+            
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            
+            content = re.sub(r"\\[a-z]+\d*\s?", "", content)
+            
+            content = re.sub(r"\{\\[^}]*?\\}\s*", "", content)
+            
+            content = re.sub(r"\{|\}", "", content)
+            
+            content = re.sub(r"\\[a-z]+\d*\s?", "", content)
+            
+            content = content.replace("\\par ", "\n")
+            content = re.sub(r"\\par\d*", "\n", content)
+            
+            content = re.sub(r"\\\'[0-9a-fA-F]{2}", "", content)
+            
+            content = content.replace("\r\n", "\n").replace("\r", "\n")
+            
+            lines = []
+            for line in content.split("\n"):
+                line = line.strip()
+                if line:
+                    lines.append(line)
+            
+            return "\n".join(lines) if lines else None
+        except Exception as e:
+            logger.error(f"RTF 提取失败 [{file_path}]: {e}")
             return None
