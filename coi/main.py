@@ -137,8 +137,8 @@ def init(folder):
 
     text_chunker = TextChunker(
         tokenizer=embedding_engine.get_tokenizer(),
-        chunk_size=256,
-        chunk_overlap=32,
+        chunk_size=512,
+        chunk_overlap=128,
     )
 
     success_count = 0
@@ -291,8 +291,8 @@ def ask(question):
         for i, chunk in enumerate(result.vector_chunks, 1):
             similarity = 1.0 - chunk.distance
             click.echo(f"  [{i}] 来源: {chunk.metadata.file_path} (相似度: {similarity:.2f})")
-            preview = chunk.text[:200].replace("\n", " ")
-            if len(chunk.text) > 200:
+            preview = chunk.text[:500].replace("\n", " ")
+            if len(chunk.text) > 500:
                 preview += "..."
             click.echo(f"      {preview}")
             click.echo()
