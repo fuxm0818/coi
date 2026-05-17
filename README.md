@@ -85,6 +85,8 @@ question-and-answer/
 │       ├── config.json     # 配置（文档路径）
 │       ├── fqa.json        # FQA 标准答案
 │       └── vector_db/      # 向量数据库
+├── docs/
+│   └── PACKAGING.md        # 跨平台打包指南
 └── .kiro/specs/            # 需求与设计文档
     └── coi-refactor/
         ├── requirements.md
@@ -117,12 +119,13 @@ CI 会自动：
 
 ```bash
 cd coi
-pip install -r requirements.txt
-python3 download_model.py   # 预下载模型（~470MB，一次性）
-python3 build.py            # 打包
+pip install -r requirements.txt pyinstaller
+python3 download_model.py   # 预下载模型（~95MB，一次性）
+python3 build.py            # 打包（产物约 150-200MB）
+./dist/coi --help           # 测试
 ```
 
-打包后在 `dist/` 目录生成独立可执行文件，内含模型，完全离线运行。
+打包后在 `dist/` 目录生成单个可执行文件，内含模型，完全离线运行。
 
 ## 业务流程
 
@@ -143,8 +146,9 @@ python3 build.py            # 打包
 
 ## 技术栈
 
-- **Embedding 模型**: paraphrase-multilingual-MiniLM-L12-v2（384 维，多语言）
+- **Embedding 模型**: BAAI/bge-small-zh-v1.5（512 维，中文检索专精，ONNX 推理）
 - **向量数据库**: ChromaDB（本地持久化，cosine 距离）
+- **推理引擎**: ONNX Runtime（无需 PyTorch，体积小速度快）
 - **CLI 框架**: Click
 - **打包工具**: PyInstaller
 - **语言**: Python 3.9+
@@ -154,14 +158,14 @@ python3 build.py            # 打包
 **开发模式（源码运行）：**
 
 - Python 3.9+
-- 约 1GB 可用内存（模型加载）
-- 首次运行需联网下载模型（约 470MB，一次性缓存到本地）
+- 约 500MB 可用内存
+- 首次运行需联网下载模型（约 95MB，一次性缓存到本地）
 
 **打包后（可执行文件）：**
 
 - 无需 Python 环境
 - 无需联网（模型已内嵌）
-- 约 1GB 可用内存
+- 单文件约 150-200MB
 
 ## 运行测试
 

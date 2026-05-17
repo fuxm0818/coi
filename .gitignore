@@ -1,23 +1,27 @@
 # IDE
 .idea/
 .vscode/
+*.swp
+*.swo
 
 # Python
 .venv/
+venv/
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
 
 # macOS
 .DS_Store
 
-# COI 数据目录（运行时生成）
+# COI 运行时数据（用户生成）
 coi/coi_data/
 
-# 模型文件（CI 中下载，不入库）
+# 模型文件（CI 中下载，不入库，~95MB）
 coi/model/
 
 # PyInstaller 打包产物
 coi/build/
 coi/dist/
-*.spec
+coi/*.spec

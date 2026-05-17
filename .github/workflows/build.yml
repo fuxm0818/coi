@@ -15,15 +15,15 @@ jobs:
           - os: ubuntu-latest
             platform: linux
             artifact_name: coi-linux
-            asset_name: coi-linux.tar.gz
+            exe_name: coi
           - os: macos-latest
             platform: macos
             artifact_name: coi-macos
-            asset_name: coi-macos.tar.gz
+            exe_name: coi
           - os: windows-latest
             platform: windows
             artifact_name: coi-windows
-            asset_name: coi-windows.zip
+            exe_name: coi.exe
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -51,31 +51,17 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
 
-      - name: Build executable
+      - name: Build single executable
         working-directory: coi
         run: python build.py
         env:
           PYTHONIOENCODING: utf-8
 
-      - name: Package artifact (Linux/macOS)
-        if: matrix.platform != 'windows'
-        working-directory: coi/dist
-        run: |
-          chmod +x coi/coi
-          tar -czf ${{ matrix.asset_name }} coi/
-
-      - name: Package artifact (Windows)
-        if: matrix.platform == 'windows'
-        working-directory: coi/dist
-        shell: pwsh
-        run: |
-          Compress-Archive -Path coi -DestinationPath ${{ matrix.asset_name }}
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: coi/dist/${{ matrix.asset_name }}
+          path: coi/dist/${{ matrix.exe_name }}
           retention-days: 7
 
   release:
@@ -99,8 +85,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release-assets/coi-linux/coi-linux.tar.gz
-            release-assets/coi-macos/coi-macos.tar.gz
-            release-assets/coi-windows/coi-windows.zip
+            release-assets/coi-linux/coi
+            release-assets/coi-macos/coi
+            release-assets/coi-windows/coi.exe
           generate_release_notes: true
           draft: false
