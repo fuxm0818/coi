@@ -26,46 +26,28 @@ jobs:
             asset_name: coi-windows.zip
 
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Free disk space (Linux)
-        if: matrix.platform == 'linux'
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/share/swift
-          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
-          sudo apt-get clean
-          df -h
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install PyTorch CPU-only
-        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-
       - name: Install dependencies
         working-directory: coi
         run: |
+          pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Check disk space
-        run: df -h
-
-      - name: Download embedding model
+      - name: Download ONNX model
         working-directory: coi
         run: python download_model.py
-        timeout-minutes: 30
+        timeout-minutes: 10
         env:
           PYTHONIOENCODING: utf-8
 

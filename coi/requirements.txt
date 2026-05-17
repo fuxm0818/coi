@@ -1,7 +1,9 @@
 # COI 运行时依赖
 click>=8.1.0
 chromadb>=0.4.0
-sentence-transformers>=2.2.0
+onnxruntime>=1.16.0
+tokenizers>=0.15.0
+huggingface-hub>=0.20.0
 python-docx>=1.0.0
 openpyxl>=3.1.0
 PyPDF2>=3.0.0

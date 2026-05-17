@@ -4,15 +4,17 @@
 使用 PyInstaller 将 COI 打包为独立可执行文件。
 支持 Windows / Mac / Linux 三平台。
 
-打包前必须先执行 download_model.py 下载模型到 model/ 目录。
-打包会将模型文件一起打入可执行文件，确保完全离线运行。
+由于使用 ONNX Runtime 替代 PyTorch，打包体积大幅缩小：
+- 程序+依赖: ~100-150MB（无 PyTorch）
+- 模型文件: ~90MB
+- 总计: ~200-250MB（压缩后更小）
 
-注意：由于内嵌 ~470MB 模型，首次启动需要解压到临时目录，
-可能需要 10-30 秒。后续启动会利用系统缓存加速。
+打包前必须先执行 download_model.py 下载模型到 model/ 目录。
 """
 
 import os
 import platform
+import shutil
 import subprocess
 import sys
 
@@ -25,36 +27,25 @@ def build():
 
     # 检查模型是否已下载
     if not os.path.isdir(model_dir):
-        print("[COI Build] 错误: model/ 目录不存在。")
-        print("  请先执行: python download_model.py")
+        print("[COI Build] Error: model/ directory not found.")
+        print("  Please run: python download_model.py")
         sys.exit(1)
 
-    if not os.path.exists(os.path.join(model_dir, "config.json")):
-        print("[COI Build] 错误: model/ 目录内容不完整。")
-        print("  请重新执行: python download_model.py")
+    if not os.path.exists(os.path.join(model_dir, "model.onnx")):
+        print("[COI Build] Error: model/model.onnx not found.")
+        print("  Please re-run: python download_model.py")
         sys.exit(1)
 
-    # 确定输出名称
     system = platform.system().lower()
-    if system == "windows":
-        output_name = "coi.exe"
-    else:
-        output_name = "coi"
 
-    # --add-data 分隔符：Windows 用 ;，Linux/macOS 用 :
-    sep = ";" if system == "windows" else ":"
-    add_data_arg = f"{model_dir}{sep}model"
-
-    # PyInstaller 参数（使用 --onedir 模式避免磁盘空间不足）
+    # PyInstaller 参数（不含模型，模型单独复制）
     args = [
         sys.executable, "-m", "PyInstaller",
         "--onedir",
         "--name", "coi",
         "--clean",
         "--noconfirm",
-        # 将模型目录打入可执行文件
-        "--add-data", add_data_arg,
-        # 隐式导入 - 核心依赖
+        # 隐式导入
         "--hidden-import", "chromadb",
         "--hidden-import", "chromadb.config",
         "--hidden-import", "chromadb.api",
@@ -63,69 +54,80 @@ def build():
         "--hidden-import", "chromadb.db.impl",
         "--hidden-import", "chromadb.segment",
         "--hidden-import", "chromadb.segment.impl",
-        # 隐式导入 - ML 依赖
-        "--hidden-import", "sentence_transformers",
-        "--hidden-import", "torch",
-        "--hidden-import", "torch.nn",
-        "--hidden-import", "torch.nn.functional",
-        "--hidden-import", "transformers",
-        "--hidden-import", "transformers.models",
+        "--hidden-import", "onnxruntime",
         "--hidden-import", "tokenizers",
-        # 隐式导入 - 文档处理
         "--hidden-import", "numpy",
         "--hidden-import", "openpyxl",
         "--hidden-import", "docx",
         "--hidden-import", "PyPDF2",
         "--hidden-import", "markdown_it",
-        # 隐式导入 - 其他
         "--hidden-import", "click",
         "--hidden-import", "tqdm",
         "--hidden-import", "huggingface_hub",
-        "--hidden-import", "safetensors",
-        # 排除不需要的大型包（减小体积）
+        # 排除不需要的包
         "--exclude-module", "matplotlib",
-        "--exclude-module", "scipy",
         "--exclude-module", "pandas",
         "--exclude-module", "PIL",
         "--exclude-module", "cv2",
         "--exclude-module", "IPython",
         "--exclude-module", "jupyter",
-        "--exclude-module", "notebook",
         "--exclude-module", "tensorboard",
-        "--exclude-module", "triton",
-        "--exclude-module", "nvidia",
-        "--exclude-module", "cuda",
-        "--exclude-module", "cupti",
-        "--exclude-module", "onnxruntime",
-        "--exclude-module", "sklearn",
-        "--exclude-module", "sympy",
+        "--exclude-module", "torch",
+        "--exclude-module", "torchvision",
+        "--exclude-module", "tensorflow",
+        "--exclude-module", "keras",
         # 入口脚本
         main_script,
     ]
 
-    print(f"[COI Build] 目标平台: {platform.system()} {platform.machine()}")
-    print(f"[COI Build] 入口脚本: {main_script}")
-    print(f"[COI Build] 模型目录: {model_dir}")
-    print(f"[COI Build] add-data: {add_data_arg}")
-    print(f"[COI Build] 输出文件: dist/{output_name}")
+    print(f"[COI Build] Platform: {platform.system()} {platform.machine()}")
+    print(f"[COI Build] Entry: {main_script}")
+    print(f"[COI Build] Model: {model_dir}")
+    print(f"[COI Build] Mode: onedir (ONNX Runtime, no PyTorch)")
     print()
 
     result = subprocess.run(args, cwd=script_dir)
 
-    if result.returncode == 0:
-        dist_dir = os.path.join(script_dir, "dist", "coi")
-        print(f"\n[COI Build] 打包成功！")
-        print(f"  输出目录: {dist_dir}")
-        print(f"\n  使用方式:")
-        if system == "windows":
-            print(f"    .\\dist\\coi\\coi.exe init C:\\path\\to\\docs")
-            print(f'    .\\dist\\coi\\coi.exe ask "你的问题"')
-        else:
-            print(f"    ./dist/coi/coi init /path/to/docs")
-            print(f'    ./dist/coi/coi ask "你的问题"')
-    else:
-        print(f"\n[COI Build] 打包失败，退出码: {result.returncode}")
+    if result.returncode != 0:
+        print(f"\n[COI Build] PyInstaller failed, exit code: {result.returncode}")
         sys.exit(1)
+
+    # 将模型目录复制到 dist/coi/model/
+    dist_coi_dir = os.path.join(script_dir, "dist", "coi")
+    dist_model_dir = os.path.join(dist_coi_dir, "model")
+
+    print(f"\n[COI Build] Copying model files...")
+    if os.path.exists(dist_model_dir):
+        shutil.rmtree(dist_model_dir)
+    shutil.copytree(model_dir, dist_model_dir)
+
+    # 计算最终大小
+    total_size = _get_dir_size(dist_coi_dir)
+    model_size = _get_dir_size(dist_model_dir)
+
+    print(f"\n[COI Build] Success!")
+    print(f"  Output: {dist_coi_dir}")
+    print(f"  Total size: {total_size:.0f} MB")
+    print(f"    - Program + deps: {total_size - model_size:.0f} MB")
+    print(f"    - Model files: {model_size:.0f} MB")
+    print(f"\n  Usage:")
+    if system == "windows":
+        print(f"    .\\dist\\coi\\coi.exe init C:\\path\\to\\docs")
+        print(f'    .\\dist\\coi\\coi.exe ask "your question"')
+    else:
+        print(f"    ./dist/coi/coi init /path/to/docs")
+        print(f'    ./dist/coi/coi ask "your question"')
+
+
+def _get_dir_size(path: str) -> float:
+    """Calculate directory size in MB"""
+    total = 0
+    for dirpath, _dirnames, filenames in os.walk(path):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            if os.path.isfile(fp):
+                total += os.path.getsize(fp)
+    return total / (1024 * 1024)
 
 
 if __name__ == "__main__":
