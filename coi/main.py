@@ -137,8 +137,8 @@ def init(folder):
 
     text_chunker = TextChunker(
         tokenizer=embedding_engine.get_tokenizer(),
-        chunk_size=512,
-        chunk_overlap=64,
+        chunk_size=256,
+        chunk_overlap=32,
     )
 
     success_count = 0
