@@ -215,8 +215,13 @@ class _TokenizerWrapper:
         self._tokenizer = tokenizer
 
     def encode(self, text: str, add_special_tokens: bool = False) -> list:
-        """编码文本为 token ID 列表"""
+        """编码文本为 token ID 列表（不截断，用于 TextChunker 计数）"""
+        # 临时禁用截断，确保完整计数
+        self._tokenizer.no_truncation()
         encoding = self._tokenizer.encode(text)
+        # 恢复截断设置（ONNX 推理需要）
+        self._tokenizer.enable_truncation(max_length=512)
+
         ids = encoding.ids
         if not add_special_tokens and len(ids) >= 2:
             # 移除 [CLS] 和 [SEP]
