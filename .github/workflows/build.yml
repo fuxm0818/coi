@@ -16,14 +16,17 @@ jobs:
             platform: linux
             artifact_name: coi-linux
             exe_name: coi
+            release_name: coi-linux
           - os: macos-latest
             platform: macos
             artifact_name: coi-macos
             exe_name: coi
+            release_name: coi-macos
           - os: windows-latest
             platform: windows
             artifact_name: coi-windows
             exe_name: coi.exe
+            release_name: coi-windows.exe
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -57,11 +60,17 @@ jobs:
         env:
           PYTHONIOENCODING: utf-8
 
+      - name: Rename for release
+        working-directory: coi/dist
+        run: |
+          mv ${{ matrix.exe_name }} ${{ matrix.release_name }}
+        shell: bash
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: coi/dist/${{ matrix.exe_name }}
+          path: coi/dist/${{ matrix.release_name }}
           retention-days: 7
 
   release:
@@ -85,8 +94,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release-assets/coi-linux/coi
-            release-assets/coi-macos/coi
-            release-assets/coi-windows/coi.exe
+            release-assets/coi-linux/coi-linux
+            release-assets/coi-macos/coi-macos
+            release-assets/coi-windows/coi-windows.exe
           generate_release_notes: true
           draft: false
