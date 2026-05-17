@@ -7,7 +7,7 @@ description: "我问你答（COI）本地离线文档问答工具。当用户提
 
 一个本地离线文档问答工具。用户指定文档文件夹，程序一次性构建向量知识库，之后可反复提问获得秒级响应。纯本地运行，不调用任何外部大模型，不上网。
 
-支持文档格式：TXT、MD、PDF、DOCX、XLSX、CSV
+支持文档格式：TXT、MD、PDF、DOCX、XLSX、CSV、PPTX、PPT、RTF
 
 ---
 

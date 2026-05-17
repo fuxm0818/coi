@@ -5,7 +5,7 @@
 ## 核心特性
 
 - **纯离线运行**：零网络依赖、零外部大模型调用、零数据上传
-- **多格式支持**：TXT、MD、PDF、DOCX、XLSX、CSV
+- **多格式支持**：TXT、MD、PDF、DOCX、XLSX、CSV、PPTX、PPT、RTF
 - **极速问答**：init 一次性建库，ask 直接复用缓存秒级返回
 - **双源合并**：向量检索 + FQA 标准答案联合输出
 - **绿色免安装**：单文件可执行程序（~150MB），双击即用
@@ -160,29 +160,19 @@ question-and-answer/
 ├── .gitignore
 ├── .github/workflows/
 │   └── build.yml              # CI 三平台自动打包
-├── coi/                       # 程序源码
-│   ├── main.py                # CLI 入口
-│   ├── config.py              # 数据目录管理
-│   ├── models.py              # 数据模型
-│   ├── scanner.py             # 文件扫描器
-│   ├── chunker.py             # 文本提取与切块
-│   ├── embedding.py           # ONNX 向量化引擎
-│   ├── store.py               # ChromaDB 向量存储
-│   ├── fqa.py                 # FQA 标准答案管理
-│   ├── query.py               # 双源查询引擎
-│   ├── build.py               # 打包脚本
-│   ├── download_model.py      # 模型下载脚本
-│   ├── setup.py               # 依赖安装脚本
-│   ├── requirements.txt       # 运行时依赖
-│   └── tests/                 # 测试套件
-│       ├── conftest.py
-│       ├── test_config.py
-│       ├── test_scanner.py
-│       ├── test_chunker.py
-│       ├── test_fqa.py
-│       └── test_cli.py
-└── .kiro/specs/coi-refactor/  # 设计文档
-    ├── requirements.md
-    ├── design.md
-    └── tasks.md
+└── coi/                       # 程序源码
+    ├── main.py                # CLI 入口
+    ├── config.py              # 数据目录管理
+    ├── models.py              # 数据模型
+    ├── scanner.py             # 文件扫描器
+    ├── chunker.py             # 文本提取与切块
+    ├── embedding.py           # ONNX 向量化引擎
+    ├── store.py               # ChromaDB 向量存储
+    ├── fqa.py                 # FQA 标准答案管理
+    ├── query.py               # 双源查询引擎
+    ├── build.py               # 打包脚本
+    ├── download_model.py      # 模型下载脚本
+    ├── setup.py               # 依赖安装脚本
+    └── requirements.txt       # 运行时依赖
+
 ```
