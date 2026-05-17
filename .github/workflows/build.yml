@@ -22,7 +22,7 @@ jobs:
             artifact_name: coi-macos-arm64
             exe_name: coi
             release_name: coi-macos-arm64
-          - os: macos-15-intel
+          - os: macos-13
             platform: macos-x86_64
             artifact_name: coi-macos-x86_64
             exe_name: coi
