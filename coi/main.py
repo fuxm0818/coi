@@ -43,7 +43,7 @@ def cli(ctx):
     所有数据存储于程序同级 coi_data/ 目录，结构透明可管理。
 
     \b
-    支持文档格式：TXT、MD、PDF、DOCX、XLSX、CSV
+    支持文档格式：TXT、MD、PDF、DOCX、XLSX、CSV、PPT、PPTX
 
     \b
     使用流程：
@@ -140,8 +140,6 @@ def init(folder):
 
     text_chunker = TextChunker(
         tokenizer=embedding_engine.get_tokenizer(),
-        chunk_size=512,
-        chunk_overlap=128,
     )
 
     success_count = 0
@@ -160,7 +158,7 @@ def init(folder):
                 continue
 
             # 切块
-            chunks = text_chunker.chunk(text)
+            chunks = text_chunker.chunk(text, change.file_path)
             if not chunks:
                 click.echo(" - 跳过（切块为空）")
                 failed_files.append({"path": change.file_path, "reason": "切块为空"})
@@ -266,7 +264,7 @@ def ask(question):
 
     # 执行查询
     try:
-        result = query_engine.query(question, top_k=5)
+        result = query_engine.query(question, top_k=15)
     except ValueError as e:
         click.echo(f"[COI] 错误: {e}", err=True)
         sys.exit(1)
@@ -291,13 +289,23 @@ def ask(question):
     if result.vector_chunks:
         has_output = True
         click.echo("═══ 文档检索结果 ═══")
-        for i, chunk in enumerate(result.vector_chunks, 1):
-            similarity = 1.0 - chunk.distance
-            click.echo(f"  [{i}] 来源: {chunk.metadata.file_path} (相似度: {similarity:.2f})")
-            preview = chunk.text[:500].replace("\n", " ")
-            if len(chunk.text) > 500:
-                preview += "..."
-            click.echo(f"      {preview}")
+
+        grouped = {}
+        for chunk in result.vector_chunks:
+            fp = chunk.metadata.file_path
+            if fp not in grouped:
+                grouped[fp] = []
+            grouped[fp].append(chunk)
+
+        for file_path, chunks in grouped.items():
+            click.echo(f"  📄 {file_path}")
+            click.echo(f"     ({len(chunks)} 个相关片段)")
+            for chunk in chunks:
+                similarity = 1.0 - chunk.distance
+                preview = chunk.text[:400].replace("\n", " ")
+                if len(chunk.text) > 400:
+                    preview += "..."
+                click.echo(f"     • 相似度 {similarity:.2f}: {preview}")
             click.echo()
 
     # 无结果

@@ -46,7 +46,7 @@ class QueryEngine:
         self.fqa_manager = fqa_manager
         self.fqa_threshold = fqa_threshold
 
-    def query(self, question: str, top_k: int = 5) -> QueryResult:
+    def query(self, question: str, top_k: int = 15) -> QueryResult:
         """执行双源合并查询
 
         最终回答 = 向量库检索到的文档原文相关片段 + 用户自定义 FQA 标准答案
