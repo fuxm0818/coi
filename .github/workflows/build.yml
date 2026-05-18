@@ -19,14 +19,9 @@ jobs:
             release_name: coi-linux
           - os: macos-latest
             platform: macos
-            artifact_name: coi-macos-arm64
+            artifact_name: coi-macos
             exe_name: coi
-            release_name: coi-macos-arm64
-          - os: macos-13
-            platform: macos-x86_64
-            artifact_name: coi-macos-x86_64
-            exe_name: coi
-            release_name: coi-macos-x86_64
+            release_name: coi-macos
           - os: windows-latest
             platform: windows
             artifact_name: coi-windows
@@ -100,8 +95,7 @@ jobs:
         with:
           files: |
             release-assets/coi-linux/coi-linux
-            release-assets/coi-macos-arm64/coi-macos-arm64
-            release-assets/coi-macos-x86_64/coi-macos-x86_64
+            release-assets/coi-macos/coi-macos
             release-assets/coi-windows/coi-windows.exe
           generate_release_notes: true
           draft: false
