@@ -15,6 +15,16 @@ import hashlib
 import os
 import sys
 
+# Windows 控制台 UTF-8 编码设置（必须在导入其他模块之前）
+if sys.platform == "win32":
+    import io
+    import codecs
+    # 设置标准输出/错误为 UTF-8
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    # 设置环境变量
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import click
