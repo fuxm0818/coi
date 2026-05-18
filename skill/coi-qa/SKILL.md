@@ -75,6 +75,14 @@ Invoke-WebRequest -Uri "https://github.com/fuxm0818/coi/releases/latest/download
 & "$coiDir\coi.exe" --help
 ```
 
+**如果下载失败，使用代理下载：**
+```powershell
+$coiDir = "$env:LOCALAPPDATA\coi"
+New-Item -ItemType Directory -Force -Path $coiDir | Out-Null
+curl.exe -L "https://ghproxy.net/https://github.com/fuxm0818/coi/releases/latest/download/coi-windows.exe" -o "$coiDir\coi.exe"
+& "$coiDir\coi.exe" --help
+```
+
 安装完成后验证 `--help` 输出正常。
 
 ### 第 3 步：检查是否已有知识库
